@@ -77,9 +77,30 @@ export interface MaterialAPI {
 export const listMaterials = (subjectId: number) =>
   apiRequest<MaterialAPI[]>(`/api/subjects/${subjectId}/materials`);
 
-export const uploadMaterial = async (subjectId: number, file: File | { uri: string; name: string; type: string }): Promise<MaterialAPI> => {
+export const uploadMaterial = async (
+  subjectId: number,
+  fileUri: string,
+  fileName: string,
+  mimeType: string = 'application/pdf',
+  fileBlob?: Blob
+): Promise<MaterialAPI> => {
   const formData = new FormData();
-  formData.append('file', file as any);
+  if (Platform.OS === 'web') {
+    if (fileBlob) {
+      formData.append('file', fileBlob, fileName);
+    } else {
+      const fetchRes = await fetch(fileUri);
+      const blob = await fetchRes.blob();
+      formData.append('file', blob, fileName);
+    }
+  } else {
+    formData.append('file', {
+      uri: fileUri,
+      name: fileName,
+      type: mimeType || 'application/pdf',
+    } as any);
+  }
+
   const res = await fetch(`${API_URL}/api/subjects/${subjectId}/upload`, {
     method: 'POST',
     body: formData,

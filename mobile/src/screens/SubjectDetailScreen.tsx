@@ -1,18 +1,18 @@
-import React from 'react';
-import { View, Text, StyleSheet, Pressable, ScrollView } from 'react-native';
+import React, { useState, useEffect } from 'react';
+import { View, Text, StyleSheet, Pressable, ScrollView, ActivityIndicator, Alert } from 'react-native';
+import * as DocumentPicker from 'expo-document-picker';
 import { colors, typography } from '../theme';
 import { Header } from '../components/Header';
 import { SparklesIcon, DocumentIcon, ScanIcon, ChevronRightIcon } from '../components/Icons';
 import { SubjectItem } from '../types';
+import { listMaterials, uploadMaterial, deleteMaterial, MaterialAPI } from '../api/client';
 
 interface SubjectDetailScreenProps {
   subject: SubjectItem;
   onBack: () => void;
   onProfile: () => void;
   onAskAI: () => void;
-  onUploadMaterials: () => void;
-  onScanNotes: () => void;
-  onOpenMaterial: (materialName: string) => void;
+  onOpenMaterial: (material: MaterialAPI) => void;
 }
 
 export function SubjectDetailScreen({
@@ -20,25 +20,80 @@ export function SubjectDetailScreen({
   onBack,
   onProfile,
   onAskAI,
-  onUploadMaterials,
-  onScanNotes,
   onOpenMaterial,
 }: SubjectDetailScreenProps) {
-  const materials = [
-    { title: 'Chapter 3: Symmetric Encryption Standards', type: 'PDF Document', size: '2.4 MB' },
-    { title: 'Chapter 4: Data Structures (Stacks & Queues)', type: 'PDF Document', size: '3.1 MB' },
-    { title: 'Lecture 2: Big-O Complexity Notes', type: 'Handwritten Scan', size: '1.8 MB' },
-    { title: 'Midterm Review Deck', type: 'Generated Deck', size: '15 Cards' },
-  ];
+  const [materials, setMaterials] = useState<MaterialAPI[]>([]);
+  const [isLoading, setIsLoading] = useState(false);
+  const [isUploading, setIsUploading] = useState(false);
+
+  const subjectIdNum = parseInt(subject.id, 10);
+
+  useEffect(() => {
+    if (subjectIdNum) {
+      loadMaterials();
+    }
+  }, [subject.id]);
+
+  const loadMaterials = async () => {
+    setIsLoading(true);
+    try {
+      const data = await listMaterials(subjectIdNum);
+      setMaterials(data);
+    } catch {
+      // Backend offline or empty
+      setMaterials([]);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handlePickAndUpload = async () => {
+    try {
+      const result = await DocumentPicker.getDocumentAsync({
+        type: ['application/pdf', 'image/*'],
+        copyToCacheDirectory: true,
+      });
+
+      if (!result.canceled && result.assets && result.assets.length > 0) {
+        const file = result.assets[0];
+        setIsUploading(true);
+        const uploaded = await uploadMaterial(
+          subjectIdNum,
+          file.uri,
+          file.name,
+          file.mimeType || 'application/pdf',
+          (file as any).file // on web DocumentPicker gives raw File object
+        );
+        setMaterials((prev) => [uploaded, ...prev]);
+        Alert.alert('Upload complete', `"${file.name}" has been parsed and indexed into your study materials.`);
+      }
+    } catch (err: any) {
+      Alert.alert('Upload failed', err.message || 'Could not upload file.');
+    } finally {
+      setIsUploading(false);
+    }
+  };
+
+  const handleDeleteMaterial = async (matId: number) => {
+    try {
+      await deleteMaterial(matId);
+      setMaterials((prev) => prev.filter((m) => m.id !== matId));
+    } catch (err: any) {
+      Alert.alert('Delete failed', err.message);
+    }
+  };
+
+  const formatFileSize = (bytes?: number) => {
+    if (!bytes) return '';
+    if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  };
 
   return (
     <View style={styles.container}>
       <Header showBack onBack={onBack} onProfile={onProfile} />
 
-      <ScrollView
-        contentContainerStyle={styles.scrollContent}
-        showsVerticalScrollIndicator={false}
-      >
+      <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
         {/* Breadcrumb */}
         <View style={styles.breadcrumbRow}>
           <Text style={styles.breadcrumbText}>SUBJECTS &gt;</Text>
@@ -49,11 +104,10 @@ export function SubjectDetailScreen({
 
         {/* Description */}
         <Text style={styles.description}>
-          {subject.description ||
-            'Algorithms, Data Structures, and Systems Architecture. Focus on module 4 preparation for the upcoming midterms.'}
+          {subject.description || 'Upload lecture notes, textbook chapters, or scanned study materials to begin.'}
         </Text>
 
-        <Text style={styles.lastStudiedMeta}>{subject.lastStudied || 'Last studied 2 hrs ago'}</Text>
+        <Text style={styles.lastStudiedMeta}>{subject.lastStudied || 'Ready for study session'}</Text>
 
         <View style={styles.divider} />
 
@@ -76,25 +130,33 @@ export function SubjectDetailScreen({
 
             <Pressable
               accessibilityLabel="Upload new materials"
-              onPress={onUploadMaterials}
+              onPress={handlePickAndUpload}
+              disabled={isUploading}
               style={({ pressed }) => [styles.actionRow, pressed && styles.rowPressed]}
             >
               <View style={styles.actionIconBadge}>
-                <DocumentIcon size={18} color={colors.brandGreen} />
+                {isUploading ? (
+                  <ActivityIndicator size="small" color={colors.brandGreen} />
+                ) : (
+                  <DocumentIcon size={18} color={colors.brandGreen} />
+                )}
               </View>
-              <Text style={styles.actionLabel}>Upload new materials</Text>
+              <Text style={styles.actionLabel}>
+                {isUploading ? 'Uploading & parsing text...' : 'Upload PDF / study material'}
+              </Text>
               <ChevronRightIcon size={16} color={colors.textMuted} />
             </Pressable>
 
             <Pressable
               accessibilityLabel="Scan handwritten notes"
-              onPress={onScanNotes}
+              onPress={handlePickAndUpload}
+              disabled={isUploading}
               style={({ pressed }) => [styles.actionRow, pressed && styles.rowPressed]}
             >
               <View style={styles.actionIconBadge}>
                 <ScanIcon size={18} color={colors.brandGreen} />
               </View>
-              <Text style={styles.actionLabel}>Scan handwritten notes</Text>
+              <Text style={styles.actionLabel}>Scan / upload image notes (OCR)</Text>
               <ChevronRightIcon size={16} color={colors.textMuted} />
             </Pressable>
           </View>
@@ -106,29 +168,38 @@ export function SubjectDetailScreen({
         <View style={styles.section}>
           <View style={styles.sectionHeaderRow}>
             <Text style={styles.sectionOverline}>STUDY MATERIALS</Text>
-            <Pressable accessibilityLabel="View all study materials">
-              <Text style={styles.viewAllText}>View All</Text>
-            </Pressable>
+            {isLoading && <ActivityIndicator size="small" color={colors.brandGreen} />}
           </View>
 
           <View style={styles.materialsList}>
-            {materials.map((item, idx) => (
+            {materials.map((item) => (
               <Pressable
-                key={idx}
-                accessibilityLabel={`Open ${item.title}`}
-                onPress={() => onOpenMaterial(item.title)}
+                key={item.id}
+                accessibilityLabel={`Open ${item.filename}`}
+                onPress={() => onOpenMaterial(item)}
                 style={({ pressed }) => [styles.materialRow, pressed && styles.rowPressed]}
               >
                 <View style={styles.materialDocBadge}>
                   <DocumentIcon size={16} color={colors.brandGreen} />
                 </View>
                 <View style={styles.materialInfo}>
-                  <Text style={styles.materialTitle}>{item.title}</Text>
-                  <Text style={styles.materialMeta}>{item.type} • {item.size}</Text>
+                  <Text style={styles.materialTitle}>{item.filename}</Text>
+                  <Text style={styles.materialMeta}>
+                    {item.file_type.toUpperCase()} • {formatFileSize(item.file_size_bytes)} • {item.chunks_count} chunks
+                  </Text>
                 </View>
                 <ChevronRightIcon size={16} color={colors.textMuted} />
               </Pressable>
             ))}
+
+            {materials.length === 0 && !isLoading && (
+              <View style={styles.emptyMaterialsCard}>
+                <Text style={styles.emptyMaterialsTitle}>No materials uploaded yet</Text>
+                <Text style={styles.emptyMaterialsSubtitle}>
+                  Tap "Upload PDF / study material" above to parse your notes with OCR and start studying.
+                </Text>
+              </View>
+            )}
           </View>
         </View>
       </ScrollView>
@@ -137,137 +208,29 @@ export function SubjectDetailScreen({
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: colors.background,
-  },
-  scrollContent: {
-    paddingHorizontal: 20,
-    paddingTop: 24,
-    paddingBottom: 36,
-  },
-  breadcrumbRow: {
-    marginBottom: 8,
-  },
-  breadcrumbText: {
-    fontFamily: typography.sansSemiBold,
-    fontSize: 11,
-    color: colors.textMuted,
-    letterSpacing: 1.5,
-  },
-  title: {
-    fontFamily: typography.serifBold,
-    fontSize: 34,
-    color: colors.textPrimary,
-    marginBottom: 16,
-    letterSpacing: -0.5,
-  },
-  description: {
-    fontFamily: typography.sansRegular,
-    fontSize: 15,
-    lineHeight: 24,
-    color: colors.textSecondary,
-    marginBottom: 12,
-  },
-  lastStudiedMeta: {
-    fontFamily: typography.sansRegular,
-    fontSize: 13,
-    color: colors.textMuted,
-    marginBottom: 20,
-  },
-  divider: {
-    height: 1,
-    backgroundColor: colors.borderLight,
-    marginVertical: 14,
-  },
-  section: {
-    paddingVertical: 8,
-  },
-  sectionOverline: {
-    fontFamily: typography.sansSemiBold,
-    fontSize: 11,
-    color: colors.textMuted,
-    letterSpacing: 1.5,
-    marginBottom: 16,
-  },
-  quickActionsList: {
-    gap: 10,
-  },
-  actionRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: 14,
-    paddingHorizontal: 16,
-    backgroundColor: '#FFFFFF',
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: colors.borderLight,
-    gap: 14,
-  },
-  actionIconBadge: {
-    width: 32,
-    height: 32,
-    borderRadius: 8,
-    backgroundColor: colors.sageBadge,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  actionLabel: {
-    flex: 1,
-    fontFamily: typography.sansMedium,
-    fontSize: 14,
-    color: colors.textPrimary,
-  },
-  sectionHeaderRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    marginBottom: 14,
-  },
-  viewAllText: {
-    fontFamily: typography.sansMedium,
-    fontSize: 13,
-    color: colors.brandGreen,
-  },
-  materialsList: {
-    backgroundColor: '#FFFFFF',
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: colors.borderLight,
-    overflow: 'hidden',
-  },
-  materialRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: 14,
-    paddingHorizontal: 16,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.borderLight,
-    gap: 12,
-  },
-  materialDocBadge: {
-    width: 28,
-    height: 34,
-    backgroundColor: colors.sageBadge,
-    borderRadius: 6,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  materialInfo: {
-    flex: 1,
-  },
-  materialTitle: {
-    fontFamily: typography.sansMedium,
-    fontSize: 14,
-    color: colors.textPrimary,
-  },
-  materialMeta: {
-    fontFamily: typography.sansRegular,
-    fontSize: 12,
-    color: colors.textMuted,
-    marginTop: 2,
-  },
-  rowPressed: {
-    opacity: 0.75,
-  },
+  container: { flex: 1, backgroundColor: colors.background },
+  scrollContent: { paddingHorizontal: 20, paddingTop: 24, paddingBottom: 36 },
+  breadcrumbRow: { marginBottom: 8 },
+  breadcrumbText: { fontFamily: typography.sansSemiBold, fontSize: 11, color: colors.textMuted, letterSpacing: 1.5 },
+  title: { fontFamily: typography.serifBold, fontSize: 34, color: colors.textPrimary, marginBottom: 16, letterSpacing: -0.5 },
+  description: { fontFamily: typography.sansRegular, fontSize: 15, lineHeight: 24, color: colors.textSecondary, marginBottom: 12 },
+  lastStudiedMeta: { fontFamily: typography.sansRegular, fontSize: 13, color: colors.textMuted, marginBottom: 20 },
+  divider: { height: 1, backgroundColor: colors.borderLight, marginVertical: 14 },
+  section: { paddingVertical: 8 },
+  sectionOverline: { fontFamily: typography.sansSemiBold, fontSize: 11, color: colors.textMuted, letterSpacing: 1.5, marginBottom: 16 },
+  quickActionsList: { gap: 10 },
+  actionRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 14, paddingHorizontal: 16, backgroundColor: '#FFFFFF', borderRadius: 12, borderWidth: 1, borderColor: colors.borderLight, gap: 14 },
+  actionIconBadge: { width: 32, height: 32, borderRadius: 8, backgroundColor: colors.sageBadge, alignItems: 'center', justifyContent: 'center' },
+  actionLabel: { flex: 1, fontFamily: typography.sansMedium, fontSize: 14, color: colors.textPrimary },
+  sectionHeaderRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 },
+  materialsList: { backgroundColor: '#FFFFFF', borderRadius: 12, borderWidth: 1, borderColor: colors.borderLight, overflow: 'hidden' },
+  materialRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 14, paddingHorizontal: 16, borderBottomWidth: 1, borderBottomColor: colors.borderLight, gap: 12 },
+  materialDocBadge: { width: 28, height: 34, backgroundColor: colors.sageBadge, borderRadius: 6, alignItems: 'center', justifyContent: 'center' },
+  materialInfo: { flex: 1 },
+  materialTitle: { fontFamily: typography.sansMedium, fontSize: 14, color: colors.textPrimary },
+  materialMeta: { fontFamily: typography.sansRegular, fontSize: 12, color: colors.textMuted, marginTop: 2 },
+  rowPressed: { opacity: 0.75 },
+  emptyMaterialsCard: { padding: 24, alignItems: 'center', gap: 6 },
+  emptyMaterialsTitle: { fontFamily: typography.serifSemiBold, fontSize: 16, color: colors.textPrimary },
+  emptyMaterialsSubtitle: { fontFamily: typography.sansRegular, fontSize: 13, color: colors.textMuted, textAlign: 'center', lineHeight: 20 },
 });

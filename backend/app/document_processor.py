@@ -150,28 +150,40 @@ def retrieve_relevant_chunks(
     query: str,
     subject_id: Optional[int] = None,
     n_results: int = 5,
+    fallback_chunks: Optional[List[str]] = None,
 ) -> List[str]:
     """
-    Query ChromaDB to retrieve the most semantically relevant chunks.
-    Optionally filter by subject_id.
-    Returns list of raw chunk text strings.
+    Query ChromaDB to retrieve semantically relevant chunks.
+    If ChromaDB is unavailable or returns 0 results, uses keyword/similarity matching over fallback chunks.
     """
     collection = _get_chroma_collection()
-    if collection is None:
-        return []
+    if collection is not None:
+        try:
+            where = {"subject_id": subject_id} if subject_id else None
+            results = collection.query(
+                query_texts=[query],
+                n_results=n_results,
+                where=where,
+            )
+            docs = results.get("documents", [[]])[0]
+            non_empty = [d for d in docs if d]
+            if non_empty:
+                return non_empty
+        except Exception as e:
+            logger.warning(f"ChromaDB query fallback: {e}")
 
-    try:
-        where = {"subject_id": subject_id} if subject_id else None
-        results = collection.query(
-            query_texts=[query],
-            n_results=n_results,
-            where=where,
-        )
-        docs = results.get("documents", [[]])[0]
-        return [d for d in docs if d]
-    except Exception as e:
-        logger.warning(f"ChromaDB query failed: {e}")
-        return []
+    # Keyword/relevance fallback across provided chunks
+    if fallback_chunks:
+        q_words = set(query.lower().split())
+        scored = []
+        for c in fallback_chunks:
+            c_words = set(c.lower().split())
+            score = len(q_words.intersection(c_words))
+            scored.append((score, c))
+        scored.sort(key=lambda x: x[0], reverse=True)
+        return [c for _, c in scored[:n_results]]
+
+    return []
 
 
 def delete_material_chunks(material_id: int) -> None:

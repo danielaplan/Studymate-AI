@@ -308,11 +308,25 @@ async def rag_chat(body: ChatRequest, db: AsyncSession = Depends(get_db)):
         if subject:
             subject_name = subject.name
 
-    # Retrieve relevant chunks from ChromaDB
+    # Load all chunks for this subject from DB as fallback
+    fallback_chunks = []
+    if body.subject_id:
+        db_chunks_res = await db.execute(
+            select(TextChunk.content)
+            .join(Material, TextChunk.material_id == Material.id)
+            .where(Material.subject_id == body.subject_id)
+        )
+        fallback_chunks = [c[0] for c in db_chunks_res.all()]
+    else:
+        db_chunks_res = await db.execute(select(TextChunk.content))
+        fallback_chunks = [c[0] for c in db_chunks_res.all()]
+
+    # Retrieve relevant chunks from ChromaDB or keyword fallback
     chunks = retrieve_relevant_chunks(
         query=body.message,
         subject_id=body.subject_id,
         n_results=5,
+        fallback_chunks=fallback_chunks,
     )
 
     # Load recent chat history
@@ -419,8 +433,20 @@ async def generate_quiz(
     if not subject:
         raise HTTPException(status_code=404, detail="Subject not found.")
 
-    query = body.topic_tag or subject.name
-    chunks = retrieve_relevant_chunks(query=query, subject_id=subject_id, n_results=8)
+    # Load DB chunks for subject
+    db_chunks_res = await db.execute(
+        select(TextChunk.content)
+        .join(Material, TextChunk.material_id == Material.id)
+        .where(Material.subject_id == subject_id)
+    )
+    fallback_chunks = [c[0] for c in db_chunks_res.all()]
+
+    chunks = retrieve_relevant_chunks(
+        query=query,
+        subject_id=subject_id,
+        n_results=8,
+        fallback_chunks=fallback_chunks,
+    )
     questions = await gemini_service.generate_quiz(
         chunks=chunks,
         subject_name=subject.name,

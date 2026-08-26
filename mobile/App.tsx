@@ -20,6 +20,7 @@ import {
 import { colors } from './src/theme';
 import { ScreenName, TabName, SubjectItem } from './src/types';
 import { BottomNav } from './src/components/BottomNav';
+import { MaterialAPI } from './src/api/client';
 
 // Screens
 import { OnboardingScreen } from './src/screens/OnboardingScreen';
@@ -31,15 +32,6 @@ import { FlashcardsScreen } from './src/screens/FlashcardsScreen';
 import { SummaryScreen } from './src/screens/SummaryScreen';
 import { QuizScreen } from './src/screens/QuizScreen';
 import { ProfileScreen } from './src/screens/ProfileScreen';
-
-const DEFAULT_SUBJECT: SubjectItem = {
-  id: '1',
-  name: 'Computer Science',
-  materialsCount: 12,
-  mastery: 75,
-  description: 'Algorithms, Data Structures, and Systems Architecture. Focus on module 4 preparation for the upcoming midterms.',
-  lastStudied: 'Last studied 2 hrs ago',
-};
 
 export default function App() {
   const [fontsLoaded] = useFonts({
@@ -57,7 +49,8 @@ export default function App() {
   const [hasCompletedOnboarding, setHasCompletedOnboarding] = useState(true);
   const [currentScreen, setCurrentScreen] = useState<ScreenName>('home');
   const [activeTab, setActiveTab] = useState<TabName>('home');
-  const [selectedSubject, setSelectedSubject] = useState<SubjectItem>(DEFAULT_SUBJECT);
+  const [selectedSubject, setSelectedSubject] = useState<SubjectItem | null>(null);
+  const [selectedMaterial, setSelectedMaterial] = useState<MaterialAPI | null>(null);
   const [chatPrompt, setChatPrompt] = useState<string | undefined>(undefined);
 
   if (!fontsLoaded) {
@@ -106,13 +99,13 @@ export default function App() {
     setCurrentScreen('subject-detail');
   };
 
-  const handleOpenMaterial = (materialName: string) => {
-    if (materialName.toLowerCase().includes('deck') || materialName.toLowerCase().includes('card')) {
-      setCurrentScreen('flashcards');
-    } else {
-      setCurrentScreen('summary');
-    }
+  const handleOpenMaterial = (material: MaterialAPI) => {
+    setSelectedMaterial(material);
+    setCurrentScreen('summary');
   };
+
+  const subjectIdNum = selectedSubject ? parseInt(selectedSubject.id, 10) : undefined;
+  const subjectName = selectedSubject?.name;
 
   const renderActiveScreen = () => {
     if (!hasCompletedOnboarding) {
@@ -136,13 +129,22 @@ export default function App() {
       case 'home':
         return (
           <HomeScreen
-            onOpenMenu={() => setCurrentScreen('subjects')}
+            onOpenMenu={() => {
+              setActiveTab('subjects');
+              setCurrentScreen('subjects');
+            }}
             onOpenProfile={() => {
               setActiveTab('profile');
               setCurrentScreen('profile');
             }}
             onSelectPrompt={handleOpenPrompt}
-            onOpenContinueSubject={() => setCurrentScreen('summary')}
+            onOpenContinueSubject={() => {
+              if (selectedSubject) setCurrentScreen('subject-detail');
+              else {
+                setActiveTab('subjects');
+                setCurrentScreen('subjects');
+              }
+            }}
             onSelectSubject={handleOpenSubject}
           />
         );
@@ -150,12 +152,17 @@ export default function App() {
       case 'chat':
         return (
           <ChatScreen
-            onOpenMenu={() => setCurrentScreen('subjects')}
+            onOpenMenu={() => {
+              setActiveTab('subjects');
+              setCurrentScreen('subjects');
+            }}
             onOpenProfile={() => {
               setActiveTab('profile');
               setCurrentScreen('profile');
             }}
             initialPrompt={chatPrompt}
+            subjectId={subjectIdNum}
+            subjectName={subjectName}
           />
         );
 
@@ -168,15 +175,17 @@ export default function App() {
               setCurrentScreen('profile');
             }}
             onSelectSubject={handleOpenSubject}
-            onAddNewSubject={() => handleOpenPrompt('Add a new subject to my study workspace')}
           />
         );
 
       case 'subject-detail':
-        return (
+        return selectedSubject ? (
           <SubjectDetailScreen
             subject={selectedSubject}
-            onBack={() => setCurrentScreen('subjects')}
+            onBack={() => {
+              setActiveTab('subjects');
+              setCurrentScreen('subjects');
+            }}
             onProfile={() => {
               setActiveTab('profile');
               setCurrentScreen('profile');
@@ -185,48 +194,73 @@ export default function App() {
               setActiveTab('chat');
               setCurrentScreen('chat');
             }}
-            onUploadMaterials={() => handleOpenPrompt(`Upload syllabus materials for ${selectedSubject.name}`)}
-            onScanNotes={() => handleOpenPrompt(`Scan handwritten study notes for ${selectedSubject.name}`)}
             onOpenMaterial={handleOpenMaterial}
+          />
+        ) : (
+          <SubjectsScreen
+            onOpenMenu={() => {}}
+            onOpenProfile={() => {
+              setActiveTab('profile');
+              setCurrentScreen('profile');
+            }}
+            onSelectSubject={handleOpenSubject}
           />
         );
 
       case 'summary':
         return (
           <SummaryScreen
-            onOpenMenu={() => setCurrentScreen('subjects')}
+            onOpenMenu={() => {
+              setActiveTab('subjects');
+              setCurrentScreen('subjects');
+            }}
             onOpenProfile={() => {
               setActiveTab('profile');
               setCurrentScreen('profile');
             }}
             onCreateQuiz={() => setCurrentScreen('quiz')}
             onCreateFlashcards={() => setCurrentScreen('flashcards')}
+            subjectId={subjectIdNum}
+            subjectName={subjectName}
+            chapterTitle={selectedMaterial?.filename}
           />
         );
 
       case 'flashcards':
         return (
           <FlashcardsScreen
-            onOpenMenu={() => setCurrentScreen('subjects')}
+            onOpenMenu={() => {
+              setActiveTab('subjects');
+              setCurrentScreen('subjects');
+            }}
             onOpenProfile={() => {
               setActiveTab('profile');
               setCurrentScreen('profile');
             }}
+            subjectId={subjectIdNum}
+            subjectName={subjectName}
+            deckTitle={selectedMaterial ? `${selectedMaterial.filename} Deck` : undefined}
           />
         );
 
       case 'quiz':
         return (
           <QuizScreen
-            onClose={() => setCurrentScreen('home')}
+            onClose={() => setCurrentScreen(selectedSubject ? 'subject-detail' : 'home')}
             onPause={() => setCurrentScreen('home')}
+            subjectId={subjectIdNum}
+            subjectName={subjectName}
+            topicTag={selectedMaterial?.filename}
           />
         );
 
       case 'profile':
         return (
           <ProfileScreen
-            onOpenMenu={() => setCurrentScreen('subjects')}
+            onOpenMenu={() => {
+              setActiveTab('subjects');
+              setCurrentScreen('subjects');
+            }}
             onOpenAISettings={() => {}}
           />
         );

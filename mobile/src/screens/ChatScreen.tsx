@@ -9,12 +9,14 @@ import {
   ActivityIndicator,
   KeyboardAvoidingView,
   Platform,
+  Alert,
 } from 'react-native';
+import * as DocumentPicker from 'expo-document-picker';
 import { colors, typography } from '../theme';
 import { Header } from '../components/Header';
 import { FolderIcon, SparklesIcon, PaperclipIcon, MicIcon, SendIcon } from '../components/Icons';
 import { ChatMessage } from '../types';
-import { sendChatMessage } from '../api/client';
+import { sendChatMessage, uploadMaterial, createSubject } from '../api/client';
 
 interface ChatScreenProps {
   onOpenMenu: () => void;
@@ -23,36 +25,6 @@ interface ChatScreenProps {
   subjectId?: number;
   subjectName?: string;
 }
-
-const INITIAL_MESSAGES: ChatMessage[] = [
-  {
-    id: '1',
-    sender: 'user',
-    text: 'Can you summarize the main differences between a stack and a queue from the textbook chapters I uploaded?',
-    timestamp: '10:42 AM',
-  },
-  {
-    id: '2',
-    sender: 'ai',
-    text: 'Based on your uploaded chapters, here are the core differences between a Stack and a Queue in data structures:',
-    timestamp: '10:42 AM',
-    materialTag: 'COMPUTER SCIENCE MATERIALS',
-    bulletPoints: [
-      {
-        title: 'Operating Principle',
-        content: 'Stack follows LIFO (Last In, First Out). Queue follows FIFO (First In, First Out).',
-      },
-      {
-        title: 'Primary Operations',
-        content: 'Stack: push() / pop(). Queue: enqueue() / dequeue().',
-      },
-      {
-        title: 'Use Cases',
-        content: 'Stack: Function call stack, undo operations. Queue: Task scheduling, BFS.',
-      },
-    ],
-  },
-];
 
 export function ChatScreen({
   onOpenMenu,
@@ -64,14 +36,64 @@ export function ChatScreen({
   const [messages, setMessages] = useState<ChatMessage[]>(() => {
     if (initialPrompt) {
       return [
-        ...INITIAL_MESSAGES,
         { id: Date.now().toString(), sender: 'user', text: initialPrompt, timestamp: 'Just now' },
       ];
     }
-    return INITIAL_MESSAGES;
+    return [
+      {
+        id: 'welcome',
+        sender: 'ai',
+        text: 'Welcome to StudyMate AI. Ask me any questions about your course materials, or tap the paperclip icon to upload new notes.',
+        timestamp: 'Ready',
+      },
+    ];
   });
   const [inputText, setInputText] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  const [isUploading, setIsUploading] = useState(false);
+
+  const handleAttachFile = async () => {
+    try {
+      const result = await DocumentPicker.getDocumentAsync({
+        type: ['application/pdf', 'image/*'],
+        copyToCacheDirectory: true,
+      });
+
+      if (!result.canceled && result.assets && result.assets.length > 0) {
+        const file = result.assets[0];
+        setIsUploading(true);
+
+        let targetSubId = subjectId;
+        if (!targetSubId) {
+          const newSub = await createSubject('Chat Uploads', 'Materials uploaded from AI chat');
+          targetSubId = newSub.id;
+        }
+
+        const uploaded = await uploadMaterial(
+          targetSubId,
+          file.uri,
+          file.name,
+          file.mimeType || 'application/pdf',
+          (file as any).file
+        );
+
+        setIsUploading(false);
+
+        // Add a system announcement message into chat
+        const confirmationMsg: ChatMessage = {
+          id: Date.now().toString(),
+          sender: 'ai',
+          text: `📄 Uploaded & Indexed "${file.name}" (${uploaded.chunks_count} chunks). You can now ask any question about this document!`,
+          timestamp: 'Just now',
+          materialTag: 'DOCUMENT ATTACHED',
+        };
+        setMessages((prev) => [...prev, confirmationMsg]);
+      }
+    } catch (err: any) {
+      setIsUploading(false);
+      Alert.alert('Attachment Error', err.message || 'Could not attach study file.');
+    }
+  };
 
   const handleSendMessage = async () => {
     const prompt = inputText.trim();
@@ -94,16 +116,16 @@ export function ChatScreen({
         sender: 'ai',
         text: data.reply,
         timestamp: 'Just now',
-        materialTag: subjectName ? `${subjectName.toUpperCase()} MATERIALS` : 'STUDY NOTES',
+        materialTag: subjectName ? `${subjectName.toUpperCase()} NOTES` : 'STUDY CITATION',
       };
       setMessages((prev) => [...prev, aiMsg]);
-    } catch {
+    } catch (err: any) {
       const fallback: ChatMessage = {
         id: (Date.now() + 1).toString(),
         sender: 'ai',
-        text: `Here's a grounded answer for "${prompt}" based on your study materials. (Backend offline — connect the FastAPI server for live RAG responses.)`,
+        text: `Error connecting to StudyMate backend: ${err.message || 'Unable to reach API'}. Please ensure FastAPI is running on port 8000.`,
         timestamp: 'Just now',
-        materialTag: 'OFFLINE MODE',
+        materialTag: 'CONNECTION ERROR',
       };
       setMessages((prev) => [...prev, fallback]);
     } finally {
@@ -113,7 +135,7 @@ export function ChatScreen({
 
   const contextLabel = subjectName
     ? `${subjectName.toUpperCase()} MATERIALS`
-    : 'COMPUTER SCIENCE MATERIALS';
+    : 'ALL STUDY MATERIALS';
 
   return (
     <KeyboardAvoidingView
@@ -162,10 +184,17 @@ export function ChatScreen({
             </View>
           ))}
 
+          {isUploading && (
+            <View style={styles.loadingIndicator}>
+              <ActivityIndicator color={colors.brandGreen} size="small" />
+              <Text style={styles.loadingText}>Uploading and indexing document chunks...</Text>
+            </View>
+          )}
+
           {isLoading && (
             <View style={styles.loadingIndicator}>
               <ActivityIndicator color={colors.brandGreen} size="small" />
-              <Text style={styles.loadingText}>Retrieving from your notes...</Text>
+              <Text style={styles.loadingText}>Searching your study materials...</Text>
             </View>
           )}
         </View>
@@ -183,10 +212,23 @@ export function ChatScreen({
           style={styles.textInput}
         />
         <View style={styles.actionButtons}>
-          <Pressable accessibilityLabel="Attach file" style={styles.iconBtn}>
-            <PaperclipIcon size={18} color={colors.textMuted} />
+          <Pressable
+            accessibilityLabel="Attach file"
+            onPress={handleAttachFile}
+            disabled={isUploading}
+            style={styles.iconBtn}
+          >
+            {isUploading ? (
+              <ActivityIndicator size="small" color={colors.brandGreen} />
+            ) : (
+              <PaperclipIcon size={18} color={colors.brandGreen} />
+            )}
           </Pressable>
-          <Pressable accessibilityLabel="Voice input" style={styles.iconBtn}>
+          <Pressable
+            accessibilityLabel="Voice input"
+            onPress={() => Alert.alert('Voice Input', 'Speak your question or prompt.')}
+            style={styles.iconBtn}
+          >
             <MicIcon size={18} color={colors.textMuted} />
           </Pressable>
           <Pressable
