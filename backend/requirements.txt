@@ -1,0 +1,24 @@
+fastapi
+uvicorn[standard]
+python-dotenv
+google-genai
+pydantic-settings
+httpx
+pytest
+
+# Document Processing & OCR
+pypdf2
+pillow
+pytesseract
+
+# Vector Storage & Embeddings
+chromadb
+sentence-transformers
+
+# Database
+sqlalchemy
+aiosqlite
+
+# File handling
+python-multipart
+aiofiles

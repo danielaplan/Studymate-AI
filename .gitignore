@@ -1,0 +1,14 @@
+# Python
+backend/.env
+backend/.venv/
+backend/__pycache__/
+backend/**/*.pyc
+
+# Node / Expo
+mobile/node_modules/
+mobile/.expo/
+mobile/.env
+
+# Local database
+database/*.db
+database/*.sqlite
