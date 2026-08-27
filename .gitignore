@@ -12,3 +12,4 @@ mobile/.env
 # Local database
 database/*.db
 database/*.sqlite
+CLAUDE.md

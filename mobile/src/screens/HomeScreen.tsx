@@ -63,7 +63,12 @@ export function HomeScreen({
   const handlePickDocument = async () => {
     try {
       const result = await DocumentPicker.getDocumentAsync({
-        type: ['application/pdf', 'image/*'],
+        type: [
+          'application/pdf', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+          'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+          'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+          'text/*', 'application/json', 'application/xml', 'image/*',
+        ],
         copyToCacheDirectory: true,
       });
 

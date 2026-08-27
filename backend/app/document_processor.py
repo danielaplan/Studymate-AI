@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 def extract_text_from_pdf(file_bytes: bytes) -> str:
-    """Extract raw text from a PDF file using PyPDF2."""
+    """Extract text from a PDF, including OCR for scanned pages when possible."""
     try:
         import PyPDF2  # type: ignore
         reader = PyPDF2.PdfReader(io.BytesIO(file_bytes))
@@ -27,19 +27,47 @@ def extract_text_from_pdf(file_bytes: bytes) -> str:
             text = page.extract_text()
             if text:
                 pages_text.append(text.strip())
-        return "\n\n".join(pages_text)
+        text = "\n\n".join(pages_text)
+        if text.strip():
+            return text
+
+        # Scanned PDFs have no text layer. PyMuPDF renders their pages for OCR.
+        import fitz  # type: ignore
+        document = fitz.open(stream=file_bytes, filetype="pdf")
+        scanned_pages = []
+        for page in document:
+            pixmap = page.get_pixmap(matrix=fitz.Matrix(2, 2), alpha=False)
+            scanned_pages.append(extract_text_from_image(pixmap.tobytes("png")))
+        return "\n\n".join(page for page in scanned_pages if page)
     except Exception as e:
         logger.error(f"PDF extraction failed: {e}")
         return ""
 
 
 def extract_text_from_image(file_bytes: bytes) -> str:
-    """Extract text from an image using Tesseract OCR."""
+    """Preprocess an image and extract printed or handwritten text with OCR."""
     try:
         import pytesseract  # type: ignore
         from PIL import Image  # type: ignore
+        from PIL import ImageEnhance, ImageFilter, ImageOps, ImageSequence  # type: ignore
+        try:
+            from pillow_heif import register_heif_opener  # type: ignore
+            register_heif_opener()
+        except ImportError:
+            pass
         img = Image.open(io.BytesIO(file_bytes))
-        return pytesseract.image_to_string(img).strip()
+        pages = []
+        for frame in ImageSequence.Iterator(img):
+            frame = ImageOps.exif_transpose(frame).convert("L")
+            # Upscaling and contrast normalization materially improve phone scans.
+            if max(frame.size) < 2400:
+                scale = 2400 / max(frame.size)
+                frame = frame.resize((round(frame.width * scale), round(frame.height * scale)))
+            frame = ImageEnhance.Contrast(frame).enhance(1.8).filter(ImageFilter.SHARPEN)
+            text = pytesseract.image_to_string(frame, config="--psm 6").strip()
+            if text:
+                pages.append(text)
+        return "\n\n".join(pages)
     except Exception as e:
         logger.warning(f"OCR extraction failed (Tesseract may not be installed): {e}")
         return ""
@@ -52,12 +80,35 @@ def extract_text(file_bytes: bytes, file_type: str) -> str:
         return extract_text_from_pdf(file_bytes)
     elif ft in {"image", "scan", "jpg", "jpeg", "png", "tiff", "bmp", "webp"}:
         return extract_text_from_image(file_bytes)
+    elif ft in {"txt", "md", "csv", "json", "xml", "html", "htm", "log", "yaml", "yml"}:
+        return file_bytes.decode("utf-8", errors="replace")
+    elif ft == "docx":
+        from docx import Document  # type: ignore
+        document = Document(io.BytesIO(file_bytes))
+        return "\n".join(paragraph.text for paragraph in document.paragraphs)
+    elif ft == "pptx":
+        from pptx import Presentation  # type: ignore
+        presentation = Presentation(io.BytesIO(file_bytes))
+        return "\n".join(
+            shape.text for slide in presentation.slides for shape in slide.shapes
+            if hasattr(shape, "text") and shape.text
+        )
+    elif ft == "xlsx":
+        import openpyxl  # type: ignore
+        workbook = openpyxl.load_workbook(io.BytesIO(file_bytes), read_only=True, data_only=True)
+        return "\n".join(
+            " | ".join(str(value) for value in row if value is not None)
+            for sheet in workbook.worksheets for row in sheet.iter_rows(values_only=True)
+        )
+    elif ft == "xls":
+        import xlrd  # type: ignore
+        workbook = xlrd.open_workbook(file_contents=file_bytes)
+        return "\n".join(
+            " | ".join(str(value) for value in sheet.row_values(row_index) if value != "")
+            for sheet in workbook.sheets() for row_index in range(sheet.nrows)
+        )
     else:
-        # Attempt PDF first, then OCR as fallback
-        text = extract_text_from_pdf(file_bytes)
-        if not text:
-            text = extract_text_from_image(file_bytes)
-        return text
+        return ""
 
 
 # ---------------------------------------------------------------------------

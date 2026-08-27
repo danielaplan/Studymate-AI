@@ -62,6 +62,13 @@ gemini_service = GeminiService(settings)
 UPLOADS_DIR = Path(__file__).parent.parent.parent / "database" / "uploads"
 UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
 
+SUPPORTED_EXTENSIONS = {
+    "pdf", "docx", "pptx", "xlsx", "xls", "txt", "md", "csv", "json", "xml",
+    "html", "htm", "log", "yaml", "yml", "jpg", "jpeg", "png", "tiff", "tif",
+    "bmp", "webp", "gif", "heic", "heif",
+}
+MAX_UPLOAD_SIZE = 50 * 1024 * 1024
+
 app = FastAPI(title="StudyMate AI API", version="1.0.0")
 app.add_middleware(
     CORSMiddleware,
@@ -169,7 +176,7 @@ async def upload_material(
     file: UploadFile = File(...),
     db: AsyncSession = Depends(get_db),
 ):
-    """Upload a PDF or image file. Runs OCR → chunking → ChromaDB embedding pipeline."""
+    """Upload a supported study file and run extraction, chunking, and indexing."""
     subject = await db.get(Subject, subject_id)
     if not subject:
         raise HTTPException(status_code=404, detail="Subject not found.")
@@ -177,15 +184,19 @@ async def upload_material(
     # Determine file type
     fname = file.filename or "upload"
     ext = Path(fname).suffix.lower().lstrip(".")
-    if ext in {"jpg", "jpeg", "png", "tiff", "bmp", "webp", "gif"}:
+    if ext not in SUPPORTED_EXTENSIONS:
+        raise HTTPException(status_code=415, detail="Unsupported file type. Upload a document, spreadsheet, presentation, text file, PDF, or image.")
+    if ext in {"jpg", "jpeg", "png", "tiff", "tif", "bmp", "webp", "gif", "heic", "heif"}:
         file_type = "image"
-    elif ext == "pdf":
-        file_type = "pdf"
     else:
-        raise HTTPException(status_code=415, detail="Unsupported file type. Upload PDF or image files.")
+        file_type = ext
 
     file_bytes = await file.read()
     file_size = len(file_bytes)
+    if file_size == 0:
+        raise HTTPException(status_code=400, detail="The uploaded file is empty.")
+    if file_size > MAX_UPLOAD_SIZE:
+        raise HTTPException(status_code=413, detail="File is too large. Maximum upload size is 50 MB.")
 
     # Save file to disk
     saved_name = f"{uuid.uuid4().hex}_{fname}"

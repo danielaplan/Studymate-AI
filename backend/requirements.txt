@@ -9,7 +9,13 @@ pytest
 # Document Processing & OCR
 pypdf2
 pillow
+pillow-heif
 pytesseract
+pymupdf
+python-docx
+python-pptx
+openpyxl
+xlrd
 
 # Vector Storage & Embeddings
 chromadb

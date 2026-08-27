@@ -22,7 +22,7 @@ import { ScreenName, TabName, SubjectItem } from './src/types';
 import { BottomNav } from './src/components/BottomNav';
 import { MaterialAPI } from './src/api/client';
 
-// Screens
+// Screenskimi
 import { OnboardingScreen } from './src/screens/OnboardingScreen';
 import { HomeScreen } from './src/screens/HomeScreen';
 import { ChatScreen } from './src/screens/ChatScreen';
