@@ -18,6 +18,7 @@ export interface SubjectItem {
   mastery: number; // 0 - 100
   description?: string;
   lastStudied?: string;
+  pinned?: boolean;
 }
 
 export interface Flashcard {

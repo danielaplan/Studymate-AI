@@ -1,8 +1,8 @@
-import React, { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, TextInput, Pressable, ScrollView, ActivityIndicator, Alert } from 'react-native';
+import React, { useState, useEffect, useRef } from 'react';
+import { View, Text, StyleSheet, TextInput, Pressable, ScrollView, ActivityIndicator, Alert, Modal, Animated } from 'react-native';
 import { colors, typography } from '../theme';
 import { Header } from '../components/Header';
-import { SearchIcon } from '../components/Icons';
+import { SearchIcon, CloseIcon } from '../components/Icons';
 import { SubjectCard } from '../components/SubjectCard';
 import { SubjectItem } from '../types';
 import { listSubjects, createSubject, SubjectAPI } from '../api/client';
@@ -26,7 +26,7 @@ function apiToSubjectItem(api: SubjectAPI): SubjectItem {
 
 // Fallback demo subjects when backend is offline
 const DEMO_SUBJECTS: SubjectItem[] = [
-  { id: '1', name: 'Computer Science', materialsCount: 12, mastery: 75, description: 'Algorithms, Data Structures, and Systems Architecture.', lastStudied: 'Last studied 2 hrs ago' },
+  { id: '1', name: 'Computer Science', materialsCount: 12, mastery: 75, description: 'Algorithms, Data Structures, and Systems Architecture.', lastStudied: 'Last studied 2 hrs ago', pinned: true },
   { id: '2', name: 'Advanced Calculus', materialsCount: 8, mastery: 50, description: 'Multivariable calculus and vector fields.' },
   { id: '3', name: 'Info Assurance', materialsCount: 9, mastery: 40, description: 'Cryptography, network security, and encryption standards.' },
   { id: '4', name: 'Cellular Biology', materialsCount: 15, mastery: 88, description: 'Cellular respiration, metabolic pathways, and DNA synthesis.' },
@@ -38,10 +38,30 @@ export function SubjectsScreen({ onOpenMenu, onOpenProfile, onSelectSubject, onA
   const [isLoading, setIsLoading] = useState(false);
   const [isAdding, setIsAdding] = useState(false);
   const [newSubjectName, setNewSubjectName] = useState('');
+  const [selectedSubjectMenu, setSelectedSubjectMenu] = useState<SubjectItem | null>(null);
+  const [renameValue, setRenameValue] = useState('');
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const sheetOpacity = useRef(new Animated.Value(0)).current;
+  const sheetTranslateY = useRef(new Animated.Value(18)).current;
 
   useEffect(() => {
     loadSubjects();
   }, []);
+
+  useEffect(() => {
+    if (!selectedSubjectMenu) {
+      Animated.parallel([
+        Animated.timing(sheetOpacity, { toValue: 0, duration: 160, useNativeDriver: true }),
+        Animated.timing(sheetTranslateY, { toValue: 18, duration: 160, useNativeDriver: true }),
+      ]).start();
+      return;
+    }
+
+    Animated.parallel([
+      Animated.timing(sheetOpacity, { toValue: 1, duration: 200, useNativeDriver: true }),
+      Animated.timing(sheetTranslateY, { toValue: 0, duration: 200, useNativeDriver: true }),
+    ]).start();
+  }, [selectedSubjectMenu]);
 
   const loadSubjects = async () => {
     setIsLoading(true);
@@ -72,9 +92,48 @@ export function SubjectsScreen({ onOpenMenu, onOpenProfile, onSelectSubject, onA
     }
   };
 
-  const filtered = subjects.filter((s) =>
+  const sortedSubjects = [...subjects].sort((a, b) => Number(b.pinned) - Number(a.pinned));
+
+  const filtered = sortedSubjects.filter((s) =>
     s.name.toLowerCase().includes(searchQuery.toLowerCase())
   );
+
+  const handleTogglePin = (subject: SubjectItem) => {
+    setSubjects((prev) =>
+      prev
+        .map((item) => (item.id === subject.id ? { ...item, pinned: !item.pinned } : item))
+        .sort((a, b) => Number(b.pinned) - Number(a.pinned))
+    );
+    setSelectedSubjectMenu(null);
+    setShowDeleteConfirm(false);
+  };
+
+  const handleRenameSubject = () => {
+    if (!selectedSubjectMenu) return;
+    const trimmed = renameValue.trim();
+    if (!trimmed) {
+      Alert.alert('Enter a new name', 'The subject name cannot be empty.');
+      return;
+    }
+
+    setSubjects((prev) => prev.map((item) => (item.id === selectedSubjectMenu.id ? { ...item, name: trimmed } : item)));
+    setSelectedSubjectMenu(null);
+    setRenameValue('');
+    setShowDeleteConfirm(false);
+  };
+
+  const handleDeleteSubject = (subject: SubjectItem) => {
+    setSubjects((prev) => prev.filter((item) => item.id !== subject.id));
+    setSelectedSubjectMenu(null);
+    setRenameValue('');
+    setShowDeleteConfirm(false);
+  };
+
+  const closeMenu = () => {
+    setSelectedSubjectMenu(null);
+    setRenameValue('');
+    setShowDeleteConfirm(false);
+  };
 
   return (
     <View style={styles.container}>
@@ -137,7 +196,10 @@ export function SubjectsScreen({ onOpenMenu, onOpenProfile, onSelectSubject, onA
               key={subject.id}
               subject={subject}
               onPress={() => onSelectSubject(subject)}
-              onOptionsPress={() => {}}
+              onOptionsPress={() => {
+                setSelectedSubjectMenu(subject);
+                setRenameValue(subject.name);
+              }}
             />
           ))}
           {filtered.length === 0 && !isLoading && (
@@ -145,6 +207,79 @@ export function SubjectsScreen({ onOpenMenu, onOpenProfile, onSelectSubject, onA
           )}
         </View>
       </ScrollView>
+
+      <Modal
+        visible={Boolean(selectedSubjectMenu)}
+        transparent
+        animationType="none"
+        onRequestClose={closeMenu}
+      >
+        <Pressable style={styles.modalOverlay} onPress={closeMenu}>
+          <Animated.View
+            style={[
+              styles.menuSheet,
+              {
+                opacity: sheetOpacity,
+                transform: [{ translateY: sheetTranslateY }],
+              },
+            ]}
+          >
+            <View style={styles.menuHeader}>
+              <Text style={styles.menuTitle}>{selectedSubjectMenu?.name || 'Subject options'}</Text>
+              <Pressable onPress={closeMenu} style={styles.closeButton}>
+                <CloseIcon size={16} color={colors.textPrimary} />
+              </Pressable>
+            </View>
+
+            {showDeleteConfirm && selectedSubjectMenu ? (
+              <>
+                <View style={styles.confirmationCard}>
+                  <Text style={styles.confirmationTitle}>Delete note?</Text>
+                  <Text style={styles.confirmationText}>This removes “{selectedSubjectMenu.name}” from your library.</Text>
+                </View>
+
+                <View style={styles.menuActionsRow}>
+                  <Pressable onPress={() => setShowDeleteConfirm(false)} style={styles.secondaryButton}>
+                    <Text style={styles.secondaryButtonText}>Keep</Text>
+                  </Pressable>
+                  <Pressable onPress={() => handleDeleteSubject(selectedSubjectMenu)} style={styles.deletePrimaryButton}>
+                    <Text style={styles.deletePrimaryButtonText}>Delete</Text>
+                  </Pressable>
+                </View>
+              </>
+            ) : (
+              <>
+                <Pressable onPress={() => handleTogglePin(selectedSubjectMenu!)} style={styles.menuActionButton}>
+                  <Text style={styles.menuActionText}>{selectedSubjectMenu?.pinned ? 'Unpin note' : 'Pin note'}</Text>
+                </Pressable>
+
+                <View style={styles.renameBox}>
+                  <TextInput
+                    value={renameValue}
+                    onChangeText={setRenameValue}
+                    placeholder="Rename subject..."
+                    placeholderTextColor={colors.textPlaceholder}
+                    style={styles.renameInput}
+                  />
+                </View>
+
+                <View style={styles.menuActionsRow}>
+                  <Pressable onPress={closeMenu} style={styles.secondaryButton}>
+                    <Text style={styles.secondaryButtonText}>Cancel</Text>
+                  </Pressable>
+                  <Pressable onPress={handleRenameSubject} style={styles.primaryButton}>
+                    <Text style={styles.primaryButtonText}>Rename</Text>
+                  </Pressable>
+                </View>
+
+                <Pressable onPress={() => setShowDeleteConfirm(true)} style={styles.deleteButton}>
+                  <Text style={styles.deleteButtonText}>Delete note</Text>
+                </Pressable>
+              </>
+            )}
+          </Animated.View>
+        </Pressable>
+      </Modal>
     </View>
   );
 }
@@ -208,4 +343,139 @@ const styles = StyleSheet.create({
   subjectsList: { gap: 12 },
   cardPressed: { opacity: 0.75 },
   emptyText: { fontFamily: typography.sansRegular, fontSize: 14, color: colors.textMuted, textAlign: 'center', paddingVertical: 30 },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.36)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 22,
+  },
+  menuSheet: {
+    width: '100%',
+    maxWidth: 420,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 22,
+    borderWidth: 1,
+    borderColor: colors.borderLight,
+    padding: 18,
+    gap: 12,
+  },
+  menuHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  menuTitle: {
+    fontFamily: typography.display,
+    fontSize: 24,
+    color: colors.textPrimary,
+    letterSpacing: -0.4,
+  },
+  closeButton: {
+    width: 30,
+    height: 30,
+    borderRadius: 10,
+    backgroundColor: colors.surfaceMuted,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  menuActionButton: {
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    borderRadius: 12,
+    backgroundColor: colors.sageBadge,
+    borderWidth: 1,
+    borderColor: colors.borderLight,
+  },
+  menuActionText: {
+    fontFamily: typography.sansMedium,
+    fontSize: 14,
+    color: colors.textPrimary,
+  },
+  renameBox: {
+    borderWidth: 1,
+    borderColor: colors.borderLight,
+    borderRadius: 12,
+    backgroundColor: colors.surfaceMuted,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+  },
+  renameInput: {
+    fontFamily: typography.sansRegular,
+    fontSize: 15,
+    color: colors.textPrimary,
+  },
+  menuActionsRow: {
+    flexDirection: 'row',
+    gap: 10,
+  },
+  secondaryButton: {
+    flex: 1,
+    backgroundColor: colors.surfaceMuted,
+    borderRadius: 12,
+    paddingVertical: 12,
+    alignItems: 'center',
+  },
+  secondaryButtonText: {
+    fontFamily: typography.sansMedium,
+    fontSize: 14,
+    color: colors.textPrimary,
+  },
+  primaryButton: {
+    flex: 1,
+    backgroundColor: colors.brandGreen,
+    borderRadius: 12,
+    paddingVertical: 12,
+    alignItems: 'center',
+  },
+  primaryButtonText: {
+    fontFamily: typography.sansMedium,
+    fontSize: 14,
+    color: '#FFFFFF',
+  },
+  confirmationCard: {
+    borderWidth: 1,
+    borderColor: '#F3C9C9',
+    borderRadius: 14,
+    backgroundColor: '#FFF7F7',
+    padding: 14,
+    gap: 6,
+  },
+  confirmationTitle: {
+    fontFamily: typography.sansSemiBold,
+    fontSize: 15,
+    color: colors.textPrimary,
+  },
+  confirmationText: {
+    fontFamily: typography.sansRegular,
+    fontSize: 13,
+    color: colors.textMuted,
+    lineHeight: 18,
+  },
+  deletePrimaryButton: {
+    flex: 1,
+    backgroundColor: colors.error,
+    borderRadius: 12,
+    paddingVertical: 12,
+    alignItems: 'center',
+  },
+  deletePrimaryButtonText: {
+    fontFamily: typography.sansMedium,
+    fontSize: 14,
+    color: '#FFFFFF',
+  },
+  deleteButton: {
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    borderRadius: 12,
+    backgroundColor: '#FBE7E7',
+    borderWidth: 1,
+    borderColor: '#F3C9C9',
+    alignItems: 'center',
+  },
+  deleteButtonText: {
+    fontFamily: typography.sansSemiBold,
+    fontSize: 14,
+    color: colors.error,
+  },
 });

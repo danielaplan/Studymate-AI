@@ -178,6 +178,13 @@ export function ChatScreen({
     ? `${subjectName.toUpperCase()} MATERIALS`
     : 'ALL STUDY MATERIALS';
 
+  const promptSuggestions = [
+    'Explain the main ideas in these notes.',
+    'Create a short quiz from this material.',
+    'Turn this into flashcards.',
+    'Summarize the key takeaways.',
+  ];
+
   return (
     <KeyboardAvoidingView
       style={styles.container}
@@ -196,6 +203,19 @@ export function ChatScreen({
           <Text style={styles.contextBadgeText}>{contextLabel}</Text>
         </View>
 
+        <View style={styles.promptSuggestions}>
+          {promptSuggestions.map((prompt) => (
+            <Pressable
+              key={prompt}
+              accessibilityLabel={`Use prompt ${prompt}`}
+              onPress={() => setInputText(prompt)}
+              style={({ pressed }) => [styles.promptChip, pressed && styles.promptChipPressed]}
+            >
+              <Text style={styles.promptChipText}>{prompt}</Text>
+            </Pressable>
+          ))}
+        </View>
+
         {/* Message Thread */}
         <View style={styles.thread}>
           {messages.map((msg) => (
@@ -207,6 +227,12 @@ export function ChatScreen({
                 <View style={styles.aiHeader}>
                   <SparklesIcon size={16} color={colors.brandGreen} />
                   <Text style={styles.aiLabel}>STUDYMATE AI</Text>
+                </View>
+              )}
+
+              {msg.materialTag && (
+                <View style={styles.materialTagBadge}>
+                  <Text style={styles.materialTagText}>{msg.materialTag}</Text>
                 </View>
               )}
 
@@ -292,14 +318,20 @@ export function ChatScreen({
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.background },
   scrollContent: { paddingHorizontal: 20, paddingTop: 16, paddingBottom: 24 },
-  contextBadge: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 18, paddingHorizontal: 6 },
+  contextBadge: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 14, paddingHorizontal: 6 },
   contextBadgeText: { fontFamily: typography.sansSemiBold, fontSize: 11, color: colors.textMuted, letterSpacing: 1.3 },
+  promptSuggestions: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 18 },
+  promptChip: { backgroundColor: '#F7F5F1', borderWidth: 1, borderColor: colors.borderLight, borderRadius: 999, paddingHorizontal: 10, paddingVertical: 8 },
+  promptChipPressed: { opacity: 0.75 },
+  promptChipText: { fontFamily: typography.sansMedium, fontSize: 12, color: colors.textPrimary },
   thread: { gap: 18 },
   messageBubble: { padding: 16, borderRadius: 20 },
   userBubble: { backgroundColor: '#F7F5F0', borderWidth: 1, borderColor: colors.borderLight, alignSelf: 'flex-end', maxWidth: '90%', shadowColor: '#000000', shadowOpacity: 0.02, shadowRadius: 8, shadowOffset: { width: 0, height: 3 }, elevation: 1 },
   aiBubble: { backgroundColor: 'transparent', paddingHorizontal: 0 },
   aiHeader: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 8 },
   aiLabel: { fontFamily: typography.sansSemiBold, fontSize: 11, color: colors.brandGreen, letterSpacing: 1.5 },
+  materialTagBadge: { alignSelf: 'flex-start', backgroundColor: colors.brandGreenSoft, borderRadius: 999, paddingHorizontal: 8, paddingVertical: 4, marginBottom: 10 },
+  materialTagText: { fontFamily: typography.sansSemiBold, fontSize: 10, letterSpacing: 1.2, textTransform: 'uppercase', color: colors.brandGreen },
   messageText: { fontFamily: typography.sansRegular, fontSize: 15, lineHeight: 24, color: colors.textPrimary },
   replyContent: { gap: 2 },
   replyLine: { fontFamily: typography.sansRegular, fontSize: 15, lineHeight: 24, color: colors.textPrimary },

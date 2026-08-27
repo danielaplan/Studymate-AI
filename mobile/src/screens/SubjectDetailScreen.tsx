@@ -4,6 +4,7 @@ import * as DocumentPicker from 'expo-document-picker';
 import { colors, typography } from '../theme';
 import { Header } from '../components/Header';
 import { SparklesIcon, DocumentIcon, ScanIcon, ChevronRightIcon } from '../components/Icons';
+import { StudyNotebookPanel } from '../components/StudyNotebookPanel';
 import { SubjectItem } from '../types';
 import { listMaterials, uploadMaterial, deleteMaterial, MaterialAPI } from '../api/client';
 
@@ -12,6 +13,7 @@ interface SubjectDetailScreenProps {
   onBack: () => void;
   onProfile: () => void;
   onAskAI: () => void;
+  onQuickAction?: (prompt: string) => void;
   onOpenMaterial: (material: MaterialAPI) => void;
 }
 
@@ -20,6 +22,7 @@ export function SubjectDetailScreen({
   onBack,
   onProfile,
   onAskAI,
+  onQuickAction,
   onOpenMaterial,
 }: SubjectDetailScreenProps) {
   const [materials, setMaterials] = useState<MaterialAPI[]>([]);
@@ -122,6 +125,23 @@ export function SubjectDetailScreen({
 
         <View style={styles.divider} />
 
+        <StudyNotebookPanel
+          subjectName={subject.name}
+          materials={materials.slice(0, 3).map((item) => ({
+            title: item.filename,
+            status: item.processing_status === 'done' ? 'ready' : item.processing_status === 'processing' ? 'processing' : 'failed',
+            count: item.chunks_count,
+          }))}
+          onQuickAction={(prompt) => {
+            if (onQuickAction) onQuickAction(prompt);
+            else onAskAI();
+          }}
+          onSelectMaterial={(title) => {
+            const material = materials.find((item) => item.filename === title);
+            if (material) onOpenMaterial(material);
+          }}
+        />
+
         {/* Quick Actions */}
         <View style={styles.section}>
           <Text style={styles.sectionOverline}>QUICK ACTIONS</Text>
@@ -129,7 +149,10 @@ export function SubjectDetailScreen({
           <View style={styles.quickActionsList}>
             <Pressable
               accessibilityLabel="Ask AI to explain concepts"
-              onPress={onAskAI}
+              onPress={() => {
+                if (onQuickAction) onQuickAction('Explain the key concepts in this subject in simple terms.');
+                else onAskAI();
+              }}
               style={({ pressed }) => [styles.actionRow, pressed && styles.rowPressed]}
             >
               <View style={styles.actionIconBadge}>

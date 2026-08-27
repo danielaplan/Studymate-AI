@@ -116,6 +116,12 @@ export default function App() {
     }
   };
 
+  const handleStudyAction = (promptText: string) => {
+    setChatPrompt(promptText);
+    setActiveTab('chat');
+    setCurrentScreen('chat');
+  };
+
   const handleOpenSubject = (subject: SubjectItem) => {
     setSelectedSubject(subject);
     setCurrentScreen('subject-detail');
@@ -216,6 +222,7 @@ export default function App() {
               setActiveTab('chat');
               setCurrentScreen('chat');
             }}
+            onQuickAction={handleStudyAction}
             onOpenMaterial={handleOpenMaterial}
           />
         ) : (
@@ -343,6 +350,7 @@ const styles = StyleSheet.create({
   },
   screenContainer: {
     flex: 1,
+    overflow: 'hidden',
   },
   loadingContainer: {
     flex: 1,
