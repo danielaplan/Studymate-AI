@@ -1,8 +1,13 @@
 import React from 'react';
 import { View, Text, StyleSheet, Pressable } from 'react-native';
+import {
+  IconHome,
+  IconNotebook,
+  IconMessageChatbot,
+  IconUser,
+} from '@tabler/icons-react-native';
 import { colors, typography } from '../theme';
 import { TabName } from '../types';
-import { HomeNavIcon, SubjectsNavIcon, ChatNavIcon, ProfileNavIcon } from './Icons';
 
 interface BottomNavProps {
   currentTab: TabName;
@@ -10,26 +15,30 @@ interface BottomNavProps {
 }
 
 export function BottomNav({ currentTab, onSelectTab }: BottomNavProps) {
-  const tabs: { key: TabName; label: string; icon: (active: boolean) => React.ReactNode }[] = [
+  const tabs: {
+    key: TabName;
+    label: string;
+    icon: (active: boolean) => React.ReactNode;
+  }[] = [
     {
       key: 'home',
       label: 'Home',
-      icon: (active) => <HomeNavIcon size={20} color={active ? colors.brandGreenDark : colors.inactiveTab} />,
+      icon: (active) => <IconHome size={20} color={active ? colors.brandGreenDark : colors.inactiveTab} strokeWidth={1.8} />,
     },
     {
       key: 'subjects',
       label: 'Subjects',
-      icon: (active) => <SubjectsNavIcon size={20} color={active ? colors.brandGreenDark : colors.inactiveTab} />,
+      icon: (active) => <IconNotebook size={20} color={active ? colors.brandGreenDark : colors.inactiveTab} strokeWidth={1.8} />,
     },
     {
       key: 'chat',
       label: 'Chat',
-      icon: (active) => <ChatNavIcon size={20} color={active ? colors.brandGreenDark : colors.inactiveTab} />,
+      icon: (active) => <IconMessageChatbot size={20} color={active ? colors.brandGreenDark : colors.inactiveTab} strokeWidth={1.8} />,
     },
     {
       key: 'profile',
       label: 'Profile',
-      icon: (active) => <ProfileNavIcon size={20} color={active ? colors.brandGreenDark : colors.inactiveTab} />,
+      icon: (active) => <IconUser size={20} color={active ? colors.brandGreenDark : colors.inactiveTab} strokeWidth={1.8} />,
     },
   ];
 
@@ -61,15 +70,22 @@ export function BottomNav({ currentTab, onSelectTab }: BottomNavProps) {
 
 const styles = StyleSheet.create({
   container: {
-    height: 78,
-    backgroundColor: 'rgba(250, 250, 244, 0.98)',
+    height: 82,
+    backgroundColor: 'rgba(255, 255, 255, 0.84)',
     borderTopWidth: 1,
-    borderTopColor: colors.borderLight,
+    borderTopColor: colors.line,
+    borderTopLeftRadius: 22,
+    borderTopRightRadius: 22,
+    shadowColor: '#000000',
+    shadowOpacity: 0.06,
+    shadowRadius: 12,
+    shadowOffset: { width: 0, height: -4 },
+    elevation: 8,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-around',
     paddingHorizontal: 12,
-    paddingBottom: 14,
+    paddingBottom: 16,
     paddingTop: 8,
   },
   tabItem: {
@@ -78,20 +94,21 @@ const styles = StyleSheet.create({
     minWidth: 64,
   },
   iconPill: {
-    width: 60,
-    height: 32,
-    borderRadius: 16,
+    width: 58,
+    height: 34,
+    borderRadius: 17,
     alignItems: 'center',
     justifyContent: 'center',
     marginBottom: 4,
   },
   activeIconPill: {
-    backgroundColor: colors.activeTabPill,
+    backgroundColor: colors.brandGreenSoft,
   },
   tabLabel: {
     fontFamily: typography.sansMedium,
-    fontSize: 12,
+    fontSize: 11.5,
     color: colors.inactiveTab,
+    letterSpacing: 0.4,
   },
   activeTabLabel: {
     color: colors.brandGreenDark,

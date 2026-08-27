@@ -85,43 +85,52 @@ export function Header({
 
 const styles = StyleSheet.create({
   container: {
-    height: 54,
+    height: 62,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingHorizontal: 20,
-    backgroundColor: colors.background,
+    paddingHorizontal: 18,
+    backgroundColor: 'rgba(255, 255, 255, 0.46)',
     borderBottomWidth: 1,
-    borderBottomColor: 'rgba(223, 227, 218, 0.5)',
+    borderBottomColor: colors.line,
   },
   leftContainer: {
-    width: 40,
+    width: 44,
     alignItems: 'flex-start',
   },
   rightContainer: {
-    width: 60,
+    width: 44,
     alignItems: 'flex-end',
   },
   iconButton: {
-    padding: 6,
-    borderRadius: 8,
+    width: 32,
+    height: 32,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.surfaceElevated,
+    borderWidth: 1,
+    borderColor: colors.borderLight,
   },
   brandTitle: {
     color: colors.brandGreen,
-    fontFamily: typography.sansSemiBold,
-    fontSize: 16,
-    letterSpacing: 2,
+    fontFamily: typography.display,
+    fontSize: 15,
+    letterSpacing: 2.4,
     textTransform: 'uppercase',
   },
   profileWrapper: {
+    width: 32,
+    height: 32,
     borderRadius: 16,
+    overflow: 'hidden',
+    borderWidth: 1,
+    borderColor: colors.lineStrong,
   },
   profileAvatar: {
     width: 32,
     height: 32,
     borderRadius: 16,
-    borderWidth: 1,
-    borderColor: 'rgba(195, 200, 189, 0.5)',
   },
   textButton: {
     paddingVertical: 4,
@@ -133,6 +142,6 @@ const styles = StyleSheet.create({
     fontSize: 14,
   },
   pressed: {
-    opacity: 0.6,
+    opacity: 0.7,
   },
 });

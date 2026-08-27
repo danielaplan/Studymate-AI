@@ -1,37 +1,47 @@
 export const colors = {
-  // Backgrounds
-  background: '#FAFAF4',
+  // Core surfaces
+  background: '#F6F4EE',
+  backgroundAlt: '#F2F0EA',
   surface: '#FFFFFF',
-  surfaceElevated: '#F5F5ED',
-  surfaceMuted: '#F0F2EB',
+  surfaceElevated: '#F9F7F3',
+  surfaceMuted: '#F0EFEA',
 
-  // Brand / Accents
-  brandGreen: '#334F2B',
-  brandGreenDark: '#243A1E',
-  brandGreenLight: '#436838',
-  sageBadge: '#DBE3D5',
-  sageBadgeText: '#2D4426',
-  
-  // Navigation & Active States
-  activeTabPill: '#C8DFFF',
-  activeTabText: '#2F486B',
-  inactiveTab: '#5C6258',
+  // Premium neutral palette
+  ink: '#1B1D1A',
+  inkSoft: '#2E332F',
+  muted: '#5E625B',
+  mutedSoft: '#7E827A',
+  line: '#E7E4DD',
+  lineStrong: '#D9D4CC',
+
+  // Brand accents
+  brandGreen: '#243C2C',
+  brandGreenDark: '#1A2C21',
+  brandGreenLight: '#5C7B62',
+  brandGreenSoft: '#DDE8DD',
+  sageBadge: '#E9F0E7',
+  sageBadgeText: '#2A3D2B',
+
+  // Modern active states
+  activeTabPill: '#E5EEF7',
+  activeTabText: '#1F426C',
+  inactiveTab: '#5F645F',
 
   // Text
-  textPrimary: '#242723',
-  textSecondary: '#4C514A',
-  textMuted: '#7E857A',
-  textPlaceholder: '#969A91',
+  textPrimary: '#1C1F1C',
+  textSecondary: '#3E443F',
+  textMuted: '#727772',
+  textPlaceholder: '#9A9E97',
 
-  // Borders & Lines
-  borderLight: '#EEF0EA',
-  borderMedium: '#DFE3DA',
-  borderDark: '#D0D6CA',
-  divider: '#E4E7DF',
+  // Border & divider
+  borderLight: '#EEEAE1',
+  borderMedium: '#DFD9D0',
+  borderDark: '#CBC3B7',
+  divider: '#E9E5DE',
 
-  // Status & Tags
-  success: '#334F2B',
-  error: '#B00020',
-  warning: '#B57414',
-  chipBg: '#F1F3ED',
+  // Status & tags
+  success: '#2A4A36',
+  error: '#B23A3A',
+  warning: '#9B6C2F',
+  chipBg: '#F4F1EB',
 };

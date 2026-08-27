@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { StyleSheet, View, ActivityIndicator } from 'react-native';
+import React, { useEffect, useRef, useState } from 'react';
+import { Animated, StyleSheet, View, ActivityIndicator, Text } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import {
@@ -46,17 +46,39 @@ export default function App() {
     Inter_700Bold,
   });
 
-  const [hasCompletedOnboarding, setHasCompletedOnboarding] = useState(true);
+  const [hasCompletedOnboarding, setHasCompletedOnboarding] = useState(false);
   const [currentScreen, setCurrentScreen] = useState<ScreenName>('home');
   const [activeTab, setActiveTab] = useState<TabName>('home');
   const [selectedSubject, setSelectedSubject] = useState<SubjectItem | null>(null);
   const [selectedMaterial, setSelectedMaterial] = useState<MaterialAPI | null>(null);
   const [chatPrompt, setChatPrompt] = useState<string | undefined>(undefined);
+  const fadeAnim = useRef(new Animated.Value(0)).current;
+  const translateY = useRef(new Animated.Value(18)).current;
+
+  useEffect(() => {
+    Animated.parallel([
+      Animated.timing(fadeAnim, {
+        toValue: 1,
+        duration: 420,
+        useNativeDriver: true,
+      }),
+      Animated.timing(translateY, {
+        toValue: 0,
+        duration: 420,
+        useNativeDriver: true,
+      }),
+    ]).start();
+  }, [currentScreen, hasCompletedOnboarding, fadeAnim, translateY]);
 
   if (!fontsLoaded) {
     return (
       <View style={styles.loadingContainer}>
-        <ActivityIndicator size="large" color={colors.brandGreen} />
+        <View style={styles.splashShell}>
+          <View style={styles.splashBadge}>
+            <Text style={styles.splashBadgeText}>S</Text>
+          </View>
+          <ActivityIndicator size="small" color={colors.brandGreen} />
+        </View>
       </View>
     );
   }
@@ -295,7 +317,17 @@ export default function App() {
     <SafeAreaProvider>
       <SafeAreaView style={styles.safeArea} edges={['top', 'left', 'right']}>
         <StatusBar style="dark" />
-        <View style={styles.screenContainer}>{renderActiveScreen()}</View>
+        <Animated.View
+          style={[
+            styles.screenContainer,
+            {
+              opacity: fadeAnim,
+              transform: [{ translateY }],
+            },
+          ]}
+        >
+          {renderActiveScreen()}
+        </Animated.View>
         {showBottomNav && (
           <BottomNav currentTab={activeTab} onSelectTab={handleSelectTab} />
         )}
@@ -317,5 +349,35 @@ const styles = StyleSheet.create({
     backgroundColor: colors.background,
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  splashShell: {
+    width: 110,
+    height: 110,
+    borderRadius: 28,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: colors.borderLight,
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#000000',
+    shadowOpacity: 0.06,
+    shadowRadius: 16,
+    shadowOffset: { width: 0, height: 8 },
+    elevation: 8,
+    gap: 10,
+  },
+  splashBadge: {
+    width: 44,
+    height: 44,
+    borderRadius: 14,
+    backgroundColor: colors.brandGreenSoft,
+    alignItems: 'center',
+    justifyContent: 'center',
+    overflow: 'hidden',
+  },
+  splashBadgeText: {
+    fontFamily: 'PlayfairDisplay_700Bold',
+    fontSize: 22,
+    color: colors.brandGreen,
   },
 });

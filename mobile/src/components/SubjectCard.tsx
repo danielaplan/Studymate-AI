@@ -41,12 +41,21 @@ export function SubjectCard({ subject, onPress, onOptionsPress }: SubjectCardPro
 
 const styles = StyleSheet.create({
   container: {
+    paddingHorizontal: 16,
     paddingVertical: 18,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.borderLight,
+    borderRadius: 18,
+    backgroundColor: '#F9F8F4',
+    borderWidth: 1,
+    borderColor: colors.borderLight,
+    shadowColor: '#000000',
+    shadowOpacity: 0.03,
+    shadowRadius: 12,
+    shadowOffset: { width: 0, height: 6 },
+    elevation: 2,
+    marginBottom: 12,
   },
   content: {
-    gap: 8,
+    gap: 10,
   },
   headerRow: {
     flexDirection: 'row',
@@ -54,14 +63,20 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
   },
   title: {
-    fontFamily: typography.serifSemiBold,
+    fontFamily: typography.display,
     fontSize: 22,
     color: colors.textPrimary,
-    letterSpacing: -0.2,
+    letterSpacing: -0.4,
   },
   optionsButton: {
-    padding: 6,
-    marginRight: -6,
+    width: 32,
+    height: 32,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.borderLight,
   },
   metaRow: {
     flexDirection: 'row',
@@ -74,6 +89,6 @@ const styles = StyleSheet.create({
     color: colors.textMuted,
   },
   pressed: {
-    opacity: 0.7,
+    opacity: 0.74,
   },
 });

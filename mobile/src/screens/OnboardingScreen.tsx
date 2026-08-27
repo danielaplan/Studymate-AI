@@ -1,6 +1,6 @@
-import React from 'react';
-import { View, Text, StyleSheet, Pressable } from 'react-native';
-import Svg, { Circle, Rect, Path, G } from 'react-native-svg';
+import React, { useEffect, useRef } from 'react';
+import { Animated, View, Text, StyleSheet, Pressable } from 'react-native';
+import Svg, { Circle, Rect, Path } from 'react-native-svg';
 import { colors, typography } from '../theme';
 
 interface OnboardingScreenProps {
@@ -9,31 +9,56 @@ interface OnboardingScreenProps {
 }
 
 export function OnboardingScreen({ onContinue, onSkip }: OnboardingScreenProps) {
+  const fadeAnim = useRef(new Animated.Value(0)).current;
+  const slideAnim = useRef(new Animated.Value(20)).current;
+
+  useEffect(() => {
+    Animated.parallel([
+      Animated.timing(fadeAnim, {
+        toValue: 1,
+        duration: 500,
+        useNativeDriver: true,
+      }),
+      Animated.timing(slideAnim, {
+        toValue: 0,
+        duration: 500,
+        useNativeDriver: true,
+      }),
+    ]).start();
+  }, [fadeAnim, slideAnim]);
+
   return (
-    <View style={styles.container}>
+    <Animated.View
+      style={[
+        styles.container,
+        {
+          opacity: fadeAnim,
+          transform: [{ translateY: slideAnim }],
+        },
+      ]}
+    >
       <View style={styles.contentContainer}>
-        {/* Minimalist Organic Art */}
+        <View style={styles.illustrationGlow} />
         <View style={styles.illustrationCard}>
-          <Svg width={180} height={180} viewBox="0 0 200 200" fill="none">
-            {/* Background subtle elements */}
-            <Circle cx="100" cy="100" r="80" fill="#EDF3E8" />
-            <Circle cx="80" cy="85" r="45" fill="#C5D9BD" opacity={0.8} />
-            <Rect x="100" y="70" width="60" height="75" rx="30" fill="#8EA883" opacity={0.9} />
-            <Circle cx="125" cy="135" r="22" fill="#58754E" />
-            {/* Subtle study motif */}
+          <Svg width={200} height={200} viewBox="0 0 200 200" fill="none">
+            <Circle cx="100" cy="100" r="82" fill="#EEF7EA" />
+            <Circle cx="78" cy="84" r="46" fill="#D6E5CF" opacity={0.9} />
+            <Rect x="98" y="72" width="54" height="72" rx="22" fill="#8DA989" opacity={0.92} />
+            <Circle cx="124" cy="136" r="24" fill="#5A7556" />
             <Path
-              d="M75 105C85 100 115 100 125 105M75 115C85 110 115 110 125 115"
-              stroke="#FAFAF4"
-              strokeWidth="2.5"
+              d="M76 103C86 98 112 98 124 103M75 115C88 110 110 110 124 115"
+              stroke="#FBFBF7"
+              strokeWidth="2.8"
               strokeLinecap="round"
             />
           </Svg>
         </View>
 
         <View style={styles.textGroup}>
-          <Text style={styles.heading}>Welcome to{'\n'}StudyMate AI</Text>
+          <Text style={styles.eyebrow}>PERSONAL STUDY AI</Text>
+          <Text style={styles.heading}>Learn from your own notes, beautifully.</Text>
           <Text style={styles.subheading}>
-            Study with your own notes. Local AI privacy by design.
+            Turn PDFs, images, and lecture notes into grounded answers, summaries, quizzes, and flashcards.
           </Text>
         </View>
       </View>
@@ -57,7 +82,7 @@ export function OnboardingScreen({ onContinue, onSkip }: OnboardingScreenProps) 
           <View style={styles.dot} />
         </View>
       </View>
-    </View>
+    </Animated.View>
   );
 }
 
@@ -72,63 +97,91 @@ const styles = StyleSheet.create({
   },
   contentContainer: {
     alignItems: 'center',
-    gap: 48,
+    gap: 40,
+  },
+  illustrationGlow: {
+    position: 'absolute',
+    top: 54,
+    width: 260,
+    height: 260,
+    borderRadius: 130,
+    backgroundColor: '#F0F4ED',
   },
   illustrationCard: {
-    width: 240,
-    height: 240,
-    backgroundColor: '#F3F6EE',
-    borderRadius: 24,
+    width: 230,
+    height: 230,
+    backgroundColor: '#F5F3EE',
+    borderRadius: 30,
     alignItems: 'center',
     justifyContent: 'center',
     borderWidth: 1,
     borderColor: colors.borderLight,
+    shadowColor: '#000000',
+    shadowOpacity: 0.04,
+    shadowRadius: 18,
+    shadowOffset: { width: 0, height: 10 },
+    elevation: 5,
+    zIndex: 2,
   },
   textGroup: {
     alignItems: 'center',
-    gap: 16,
-    paddingHorizontal: 12,
+    gap: 14,
+    paddingHorizontal: 10,
+    zIndex: 2,
+  },
+  eyebrow: {
+    fontFamily: typography.sansSemiBold,
+    fontSize: 11,
+    letterSpacing: 2.2,
+    color: colors.textMuted,
   },
   heading: {
-    fontFamily: typography.serifBold,
-    fontSize: 34,
-    lineHeight: 44,
+    fontFamily: typography.display,
+    fontSize: 36,
+    lineHeight: 42,
     color: colors.textPrimary,
     textAlign: 'center',
-    letterSpacing: -0.5,
+    letterSpacing: -1,
   },
   subheading: {
     fontFamily: typography.sansRegular,
     fontSize: 16,
-    lineHeight: 24,
+    lineHeight: 25,
     color: colors.textSecondary,
     textAlign: 'center',
+    maxWidth: 300,
   },
   bottomActionGroup: {
     alignItems: 'center',
-    gap: 16,
+    gap: 18,
     width: '100%',
   },
   continueButton: {
     width: '100%',
-    height: 54,
+    height: 58,
     backgroundColor: '#1E221D',
-    borderRadius: 27,
+    borderRadius: 20,
     alignItems: 'center',
     justifyContent: 'center',
+    shadowColor: '#000000',
+    shadowOpacity: 0.08,
+    shadowRadius: 12,
+    shadowOffset: { width: 0, height: 8 },
+    elevation: 4,
   },
   continueButtonPressed: {
-    opacity: 0.85,
+    opacity: 0.86,
     transform: [{ scale: 0.99 }],
   },
   continueButtonText: {
     fontFamily: typography.sansSemiBold,
     fontSize: 16,
     color: '#FFFFFF',
+    letterSpacing: 0.4,
   },
   skipButton: {
     paddingVertical: 8,
-    paddingHorizontal: 16,
+    paddingHorizontal: 18,
   },
   skipButtonText: {
     fontFamily: typography.sansMedium,
@@ -142,15 +195,15 @@ const styles = StyleSheet.create({
     marginTop: 8,
   },
   dot: {
-    width: 6,
-    height: 6,
-    borderRadius: 3,
-    backgroundColor: '#D1D6CB',
+    width: 7,
+    height: 7,
+    borderRadius: 3.5,
+    backgroundColor: '#D3D7CF',
   },
   activeDot: {
     backgroundColor: '#1E221D',
-    width: 8,
-    height: 8,
-    borderRadius: 4,
+    width: 10,
+    height: 10,
+    borderRadius: 5,
   },
 });

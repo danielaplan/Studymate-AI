@@ -222,6 +222,28 @@ export function HomeScreen({
             </View>
           )}
 
+          <View style={styles.summaryCard}>
+            <View style={styles.summaryCardHeader}>
+              <Text style={styles.summaryEyebrow}>Study pulse</Text>
+              <Text style={styles.summaryBadge}>+12%</Text>
+            </View>
+            <Text style={styles.summaryHeadline}>You’re on a strong rhythm.</Text>
+            <View style={styles.summaryMetrics}>
+              <View style={styles.metricPill}>
+                <Text style={styles.metricValue}>4</Text>
+                <Text style={styles.metricLabel}>notes</Text>
+              </View>
+              <View style={styles.metricPill}>
+                <Text style={styles.metricValue}>81%</Text>
+                <Text style={styles.metricLabel}>mastery</Text>
+              </View>
+              <View style={styles.metricPill}>
+                <Text style={styles.metricValue}>2</Text>
+                <Text style={styles.metricLabel}>quizzes</Text>
+              </View>
+            </View>
+          </View>
+
           <View style={styles.quickPillsWrapper}>
             <QuickActionPill
               label="Summarize my notes"
@@ -354,27 +376,38 @@ const styles = StyleSheet.create({
     paddingBottom: 32,
   },
   promptSection: {
-    paddingTop: 36,
-    paddingBottom: 28,
+    paddingTop: 22,
+    paddingBottom: 20,
   },
   promptRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    borderBottomWidth: 1,
-    borderBottomColor: colors.borderMedium,
-    paddingBottom: 10,
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.borderLight,
+    borderRadius: 20,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    shadowColor: '#000000',
+    shadowOpacity: 0.04,
+    shadowRadius: 12,
+    shadowOffset: { width: 0, height: 6 },
+    elevation: 3,
   },
   inputField: {
     flex: 1,
     fontFamily: typography.sansRegular,
-    fontSize: 18,
+    fontSize: 17,
     color: colors.textPrimary,
     paddingVertical: 4,
   },
   attachBtn: {
-    padding: 8,
-    borderRadius: 8,
-    backgroundColor: '#FAFBF8',
+    width: 36,
+    height: 36,
+    borderRadius: 12,
+    backgroundColor: colors.brandGreenSoft,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   attachBtnPressed: {
     backgroundColor: colors.sageBadge,
@@ -391,10 +424,79 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: colors.brandGreen,
   },
+  summaryCard: {
+    marginTop: 18,
+    paddingHorizontal: 18,
+    paddingVertical: 16,
+    backgroundColor: '#F7F5F1',
+    borderRadius: 22,
+    borderWidth: 1,
+    borderColor: colors.borderLight,
+    shadowColor: '#000000',
+    shadowOpacity: 0.03,
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 2,
+  },
+  summaryCardHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  summaryEyebrow: {
+    fontFamily: typography.sansSemiBold,
+    fontSize: 11,
+    letterSpacing: 1.4,
+    textTransform: 'uppercase',
+    color: colors.textMuted,
+  },
+  summaryBadge: {
+    fontFamily: typography.sansMedium,
+    fontSize: 11,
+    color: colors.brandGreen,
+    backgroundColor: colors.brandGreenSoft,
+    paddingHorizontal: 8,
+    paddingVertical: 5,
+    borderRadius: 999,
+    overflow: 'hidden',
+  },
+  summaryHeadline: {
+    marginTop: 10,
+    fontFamily: typography.display,
+    fontSize: 22,
+    color: colors.brandGreenDark,
+    letterSpacing: -0.5,
+  },
+  summaryMetrics: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginTop: 16,
+  },
+  metricPill: {
+    flex: 1,
+    paddingVertical: 12,
+    paddingHorizontal: 10,
+    borderRadius: 14,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: colors.borderLight,
+    alignItems: 'center',
+  },
+  metricValue: {
+    fontFamily: typography.serifBold,
+    fontSize: 20,
+    color: colors.textPrimary,
+  },
+  metricLabel: {
+    marginTop: 4,
+    fontFamily: typography.sansRegular,
+    fontSize: 11,
+    color: colors.textMuted,
+  },
   quickPillsWrapper: {
     alignItems: 'center',
     gap: 12,
-    marginTop: 24,
+    marginTop: 22,
   },
   divider: {
     height: 1,
@@ -410,10 +512,11 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
   },
   sectionTitle: {
-    fontFamily: typography.serifSemiBold,
+    fontFamily: typography.display,
     fontSize: 22,
     color: colors.brandGreenDark,
-    marginBottom: 20,
+    marginBottom: 18,
+    letterSpacing: -0.4,
   },
   continueCard: {
     flexDirection: 'row',
@@ -421,15 +524,20 @@ const styles = StyleSheet.create({
     backgroundColor: '#FFFFFF',
     borderWidth: 1,
     borderColor: colors.borderLight,
-    borderRadius: 12,
+    borderRadius: 22,
     padding: 16,
     gap: 16,
+    shadowColor: '#000000',
+    shadowOpacity: 0.04,
+    shadowRadius: 12,
+    shadowOffset: { width: 0, height: 6 },
+    elevation: 3,
   },
   documentBadge: {
-    width: 38,
+    width: 42,
     height: 48,
-    backgroundColor: colors.sageBadge,
-    borderRadius: 8,
+    backgroundColor: colors.brandGreenSoft,
+    borderRadius: 12,
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -438,7 +546,7 @@ const styles = StyleSheet.create({
   },
   chapterTitle: {
     fontFamily: typography.serifSemiBold,
-    fontSize: 17,
+    fontSize: 18,
     lineHeight: 24,
     color: colors.textPrimary,
   },
@@ -481,10 +589,15 @@ const styles = StyleSheet.create({
   },
   subjectsList: {
     backgroundColor: '#FFFFFF',
-    borderRadius: 12,
+    borderRadius: 18,
     borderWidth: 1,
     borderColor: colors.borderLight,
     paddingHorizontal: 16,
+    shadowColor: '#000000',
+    shadowOpacity: 0.03,
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 2,
   },
   subjectRow: {
     height: 64,

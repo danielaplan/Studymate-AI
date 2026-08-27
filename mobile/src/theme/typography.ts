@@ -10,6 +10,12 @@ export const typography = {
   sansMedium: 'Inter_500Medium',
   sansSemiBold: 'Inter_600SemiBold',
   sansBold: 'Inter_700Bold',
+
+  // Additional convenience scales for premium UI
+  display: 'PlayfairDisplay_600SemiBold',
+  heading: 'Inter_600SemiBold',
+  body: 'Inter_400Regular',
+  label: 'Inter_500Medium',
 };
 
 export const fontFallback = {
