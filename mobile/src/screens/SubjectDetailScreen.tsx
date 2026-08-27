@@ -25,6 +25,7 @@ export function SubjectDetailScreen({
   const [materials, setMaterials] = useState<MaterialAPI[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
+  const [materialsError, setMaterialsError] = useState<string | null>(null);
 
   const subjectIdNum = parseInt(subject.id, 10);
 
@@ -39,9 +40,9 @@ export function SubjectDetailScreen({
     try {
       const data = await listMaterials(subjectIdNum);
       setMaterials(data);
-    } catch {
-      // Backend offline or empty
-      setMaterials([]);
+      setMaterialsError(null);
+    } catch (error: any) {
+      setMaterialsError(error?.message || 'Could not load materials from the backend.');
     } finally {
       setIsLoading(false);
     }
@@ -69,8 +70,13 @@ export function SubjectDetailScreen({
           file.mimeType || 'application/pdf',
           (file as any).file // on web DocumentPicker gives raw File object
         );
-        setMaterials((prev) => [uploaded, ...prev]);
-        Alert.alert('Upload complete', `"${file.name}" has been parsed and indexed into your study materials.`);
+        await loadMaterials();
+        Alert.alert(
+          uploaded.processing_status === 'done' ? 'Upload complete' : 'Upload needs attention',
+          uploaded.processing_status === 'done'
+            ? `"${file.name}" has been parsed and indexed into your study materials.`
+            : `"${file.name}" was saved, but could not be processed. Check the backend logs.`,
+        );
       }
     } catch (err: any) {
       Alert.alert('Upload failed', err.message || 'Could not upload file.');
@@ -177,6 +183,15 @@ export function SubjectDetailScreen({
           </View>
 
           <View style={styles.materialsList}>
+            {materialsError && (
+              <View style={styles.emptyMaterialsCard}>
+                <Text style={styles.emptyMaterialsTitle}>Materials could not be loaded</Text>
+                <Text style={styles.emptyMaterialsSubtitle}>{materialsError}</Text>
+                <Pressable onPress={loadMaterials} style={styles.retryButton}>
+                  <Text style={styles.retryButtonText}>Retry</Text>
+                </Pressable>
+              </View>
+            )}
             {materials.map((item) => (
               <Pressable
                 key={item.id}
@@ -197,7 +212,7 @@ export function SubjectDetailScreen({
               </Pressable>
             ))}
 
-            {materials.length === 0 && !isLoading && (
+            {materials.length === 0 && !isLoading && !materialsError && (
               <View style={styles.emptyMaterialsCard}>
                 <Text style={styles.emptyMaterialsTitle}>No materials uploaded yet</Text>
                 <Text style={styles.emptyMaterialsSubtitle}>
@@ -238,4 +253,6 @@ const styles = StyleSheet.create({
   emptyMaterialsCard: { padding: 24, alignItems: 'center', gap: 6 },
   emptyMaterialsTitle: { fontFamily: typography.serifSemiBold, fontSize: 16, color: colors.textPrimary },
   emptyMaterialsSubtitle: { fontFamily: typography.sansRegular, fontSize: 13, color: colors.textMuted, textAlign: 'center', lineHeight: 20 },
+  retryButton: { marginTop: 12, paddingHorizontal: 16, paddingVertical: 8, backgroundColor: colors.brandGreen, borderRadius: 6 },
+  retryButtonText: { fontFamily: typography.sansSemiBold, fontSize: 12, color: colors.background },
 });

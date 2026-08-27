@@ -184,6 +184,20 @@ async def upload_material(
     # Determine file type
     fname = file.filename or "upload"
     ext = Path(fname).suffix.lower().lstrip(".")
+    mime_to_extension = {
+        "application/pdf": "pdf",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document": "docx",
+        "application/vnd.openxmlformats-officedocument.presentationml.presentation": "pptx",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": "xlsx",
+        "application/vnd.ms-excel": "xls",
+        "text/plain": "txt",
+        "text/markdown": "md",
+        "text/csv": "csv",
+        "application/json": "json",
+        "application/xml": "xml",
+    }
+    if ext not in SUPPORTED_EXTENSIONS:
+        ext = mime_to_extension.get(file.content_type or "", ext)
     if ext not in SUPPORTED_EXTENSIONS:
         raise HTTPException(status_code=415, detail="Unsupported file type. Upload a document, spreadsheet, presentation, text file, PDF, or image.")
     if ext in {"jpg", "jpeg", "png", "tiff", "tif", "bmp", "webp", "gif", "heic", "heif"}:

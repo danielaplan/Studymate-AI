@@ -1,15 +1,66 @@
-# Python
-backend/.env
-backend/.venv/
-backend/__pycache__/
-backend/**/*.pyc
+# Secrets and local environment files
+.env
+.env.*
+!.env.example
+!.env.*.example
+**/.env
+**/.env.*
+!**/.env.example
+!**/.env.*.example
+
+# Python environments, caches, and test output
+.venv/
+venv/
+env/
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Python tool-local files
+*.egg-info/
+dist/
+build/
 
 # Node / Expo
 mobile/node_modules/
 mobile/.expo/
 mobile/.env
+node_modules/
+.expo/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Build output
+.parcel-cache/
+.turbo/
+web-build/
+out/
 
 # Local database
 database/*.db
 database/*.sqlite
+database/*.sqlite3
+database/*.db-*
+database/chroma_store/
+database/uploads/
+
+# Logs and temporary files
+*.log
+*.tmp
+*.temp
+*.swp
+*.swo
+
+# Operating system and editor metadata
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
 CLAUDE.md

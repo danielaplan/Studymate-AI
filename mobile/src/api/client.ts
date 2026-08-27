@@ -75,7 +75,9 @@ export interface MaterialAPI {
 }
 
 export const listMaterials = (subjectId: number) =>
-  apiRequest<MaterialAPI[]>(`/api/subjects/${subjectId}/materials`);
+  apiRequest<MaterialAPI[]>(`/api/subjects/${subjectId}/materials`, {
+    cache: 'no-store',
+  });
 
 export const uploadMaterial = async (
   subjectId: number,
