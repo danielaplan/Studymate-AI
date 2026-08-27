@@ -26,6 +26,42 @@ interface ChatScreenProps {
   subjectName?: string;
 }
 
+function renderFormattedReply(text: string) {
+  const sourceMatch = text.match(/\[(CHUNK\s+\d+(?:\s*,\s*CHUNK\s+\d+)*)\]/gi);
+  const cleanedText = text
+    .replace(/\[(CHUNK\s+\d+(?:\s*,\s*CHUNK\s+\d+)*)\]/gi, '')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+
+  const renderInline = (line: string) => {
+    const parts = line.split(/(\*\*[^*]+\*\*|__[^_]+__|`[^`]+`)/g);
+    return parts.map((part, index) => {
+      if (/^\*\*.+\*\*$/.test(part) || /^__.+__$/.test(part)) {
+        return <Text key={index} style={styles.replyStrong}>{part.slice(2, -2)}</Text>;
+      }
+      if (/^`.+`$/.test(part)) {
+        return <Text key={index} style={styles.replyCode}>{part.slice(1, -1)}</Text>;
+      }
+      return <Text key={index}>{part}</Text>;
+    });
+  };
+
+  return (
+    <>
+      {cleanedText.split('\n').map((line, index) => (
+        <Text key={index} style={line.trim() ? styles.replyLine : styles.replySpacer}>
+          {renderInline(line.trim())}
+        </Text>
+      ))}
+      {sourceMatch && (
+        <Text style={styles.sourceLabel}>
+          Sources: {sourceMatch[1].replace(/CHUNK\s+/gi, 'Chunk ')}
+        </Text>
+      )}
+    </>
+  );
+}
+
 export function ChatScreen({
   onOpenMenu,
   onOpenProfile,
@@ -174,7 +210,11 @@ export function ChatScreen({
                 </View>
               )}
 
-              <Text style={styles.messageText}>{msg.text}</Text>
+              {msg.sender === 'ai' ? (
+                <View style={styles.replyContent}>{renderFormattedReply(msg.text)}</View>
+              ) : (
+                <Text style={styles.messageText}>{msg.text}</Text>
+              )}
 
               {msg.bulletPoints && (
                 <View style={styles.bulletsContainer}>
@@ -261,6 +301,12 @@ const styles = StyleSheet.create({
   aiHeader: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 10 },
   aiLabel: { fontFamily: typography.sansSemiBold, fontSize: 11, color: colors.brandGreen, letterSpacing: 1.5 },
   messageText: { fontFamily: typography.sansRegular, fontSize: 15, lineHeight: 24, color: colors.textPrimary },
+  replyContent: { gap: 2 },
+  replyLine: { fontFamily: typography.sansRegular, fontSize: 15, lineHeight: 24, color: colors.textPrimary },
+  replySpacer: { height: 10 },
+  replyStrong: { fontFamily: typography.sansSemiBold, color: colors.textPrimary },
+  replyCode: { fontFamily: typography.sansMedium, color: colors.brandGreen, backgroundColor: colors.sageBadge },
+  sourceLabel: { marginTop: 12, fontFamily: typography.sansMedium, fontSize: 12, lineHeight: 18, color: colors.textMuted },
   bulletsContainer: { marginTop: 14, gap: 12 },
   bulletItem: { gap: 4 },
   bulletTitle: { fontFamily: typography.sansSemiBold, fontSize: 14, color: colors.textPrimary },
