@@ -1,15 +1,17 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { View, Text, StyleSheet, TextInput, Pressable, ScrollView, ActivityIndicator, Alert, Modal } from 'react-native';
 import * as DocumentPicker from 'expo-document-picker';
 import { colors, typography } from '../theme';
 import { Header } from '../components/Header';
-import { PaperclipIcon, DocumentIcon, CloseIcon, ChevronRightIcon } from '../components/Icons';
+import { PaperclipIcon, DocumentIcon, CloseIcon, ChevronRightIcon, FolderIcon, ClockIcon, SparklesIcon } from '../components/Icons';
 import { QuickActionPill } from '../components/QuickActionPill';
 import { MasteryProgressBar } from '../components/MasteryProgressBar';
-import { SubjectItem, QuizAttempt } from '../types';
+import { SubjectItem, QuizAttempt, GuidedCapture, GuidedFile, GuidedOutput, GuidedScope } from '../types';
 import { loadQuizHistory } from '../storage/quizHistory';
 import { addMemoryEntry } from '../storage/subjectMemory';
-import { listSubjects, createSubject, uploadMaterial, extractTextAndSuggestTitle, SubjectAPI } from '../api/client';
+import { listSubjects, createSubject, uploadMaterial, searchSource, fileReuseCheck, SubjectAPI, FileReuseCheckResult } from '../api/client';
+import { buildSuggestions } from '../utils/intent';
+import { GuidedCaptureThread } from '../components/GuidedCaptureThread';
 
 interface HomeScreenProps {
   onOpenMenu: () => void;
@@ -18,6 +20,12 @@ interface HomeScreenProps {
   onOpenContinueSubject: () => void;
   onSelectSubject: (subject: SubjectItem) => void;
   onOpenQuizResult: (attempt: QuizAttempt) => void;
+  // Smart study box (Slice 4): hand off to grounded chat in a matched subject.
+  onOpenChatWithSubject?: (subject: SubjectItem, prompt: string) => void;
+  // Guided create-subject thread (Slice 4 remainder). Durable capture state is
+  // lifted to App (guard M1) so in-progress answers survive Home unmounting.
+  guided?: GuidedCapture | null;
+  onGuidedChange?: (capture: GuidedCapture | null) => void;
 }
 
 function quizBand(pct: number): string {
@@ -47,6 +55,46 @@ function apiToSubjectItem(api: SubjectAPI): SubjectItem {
   };
 }
 
+// Derives a readable subject name from a filename (strip extension, swap
+// _/- for spaces, title-case). Used as the guided name field's default so the
+// flow never burns an AI call just to pre-fill an editable text input (M2).
+function cleanFileName(name: string): string {
+  const base = name.replace(/\.[^.]+$/, '').replace(/[_-]+/g, ' ').replace(/\s+/g, ' ').trim();
+  if (!base) return 'Study Notes';
+  return base
+    .split(' ')
+    .map((w) => (w ? w.charAt(0).toUpperCase() + w.slice(1) : w))
+    .join(' ');
+}
+
+// Composes the chat prompt handed off after the guided flow finishes (decision
+// 6: pre-fill, you send). Shaped by the scope + output answers (decision 5).
+// Per Slice 3 / decision C the guided flow ALWAYS hands off to grounded Chat —
+// even quiz/flashcard outputs become a chat prompt, never a dedicated screen.
+function composeGuidedPrompt(c: GuidedCapture): string {
+  const name = c.name || 'this subject';
+  const section = c.scope === 'section' && c.section ? c.section.trim() : null;
+  switch (c.output) {
+    case 'guide':
+      return section
+        ? `Create a study guide for the section on ${section} in my ${name} notes.`
+        : `Create a study guide for my ${name} notes.`;
+    case 'quiz':
+      return section
+        ? `Quiz me on the section on ${section} in my ${name} notes.`
+        : `Quiz me on my ${name} notes.`;
+    case 'flashcards':
+      return section
+        ? `Make flashcards for the section on ${section} in my ${name} notes.`
+        : `Make flashcards for my ${name} notes.`;
+    case 'chat':
+    default:
+      return section
+        ? `Explain the section on ${section} from my ${name} notes.`
+        : `I've uploaded my ${name} notes. Give me an overview to get started.`;
+  }
+}
+
 // Picks a single study recommendation from the loaded subjects, using only the
 // data HomeScreen already has (overall mastery per subject — no extra fetches).
 // Priority: (1) an unassessed subject -> nudge to take a first quiz,
@@ -73,6 +121,39 @@ function buildRecommendation(items: SubjectItem[]): string {
   return `Strong progress — ${avg}% average mastery across ${assessed.length} subjects.`;
 }
 
+// Fallback subject pick when the global source-match finds no confident match
+// (fix #15, user request: "whatever I ask it will make use of that unless there
+// is no upload at all"). As long as the library is non-empty, the request must
+// land in SOME subject's chat — never a dead-end notice. Best effort: rank
+// subjects by word-overlap between the prompt and the subject name (same idea
+// as buildSuggestions); if nothing overlaps, use the first subject.
+function pickFallbackSubject(prompt: string, subjects: SubjectItem[]): SubjectItem {
+  const words = prompt.toLowerCase().split(/\s+/).filter((w) => w.length > 2);
+  let best = subjects[0];
+  let bestScore = 0;
+  for (const s of subjects) {
+    const name = s.name.toLowerCase();
+    const score = words.reduce((acc, w) => (name.includes(w) ? acc + 1 : acc), 0);
+    if (score > bestScore) {
+      best = s;
+      bestScore = score;
+    }
+  }
+  return best;
+}
+
+// Lightweight placeholder rows shown while the initial subject load is in flight,
+// so the screen doesn't flash empty states before data arrives.
+function SkeletonList({ rows = 3 }: { rows?: number }) {
+  return (
+    <View style={styles.skeletonList}>
+      {Array.from({ length: rows }).map((_, i) => (
+        <View key={i} style={styles.skeletonRow} />
+      ))}
+    </View>
+  );
+}
+
 export function HomeScreen({
   onOpenMenu,
   onOpenProfile,
@@ -80,20 +161,49 @@ export function HomeScreen({
   onOpenContinueSubject,
   onSelectSubject,
   onOpenQuizResult,
+  onOpenChatWithSubject,
+  guided,
+  onGuidedChange,
 }: HomeScreenProps) {
   const [inputPrompt, setInputPrompt] = useState('');
   const [subjects, setSubjects] = useState<SubjectItem[]>([]);
   const [history, setHistory] = useState<QuizAttempt[]>([]);
   const [subjectsLoadFailed, setSubjectsLoadFailed] = useState(false);
-  const [isLoading, setIsLoading] = useState(false);
+  const [isLoading, setIsLoading] = useState(true);
   const [isUploading, setIsUploading] = useState(false);
   const [uploadStatus, setUploadStatus] = useState<string>('');
+  // Smart study box: while the global source-match is in flight.
+  const [isMatching, setIsMatching] = useState(false);
+  // Inline notice shown under the box when no uploaded source matches the
+  // question (Slice 2). Cleared as soon as the user edits their text.
+  const [noSourceNotice, setNoSourceNotice] = useState<string | null>(null);
 
   // Modal to choose subject if multiple exist when uploading from Home
   const [pendingFile, setPendingFile] = useState<DocumentPicker.DocumentPickerAsset | null>(null);
+  // content_hash of the pending file from the cheap reuse check (guard E/K).
+  // Empty string if the check failed/was skipped (treated as a new file).
+  const [pendingFileHash, setPendingFileHash] = useState('');
   const [showSubjectPickerModal, setShowSubjectPickerModal] = useState(false);
   // Shown after a file is picked (when subjects exist) to decide: new subject vs existing.
   const [showUploadTargetModal, setShowUploadTargetModal] = useState(false);
+  // Expands the Recent quizzes list beyond its capped preview.
+  const [showAllQuizzes, setShowAllQuizzes] = useState(false);
+
+  // --- Guided create-subject thread (Slice 4 remainder) ---
+  // The durable capture state (answers collected so far) is LIFTED to App
+  // (guard M1): HomeScreen unmounts on every navigation, and the in-progress
+  // answers must survive the user wandering off mid-flow. Only transient UI
+  // state (busy spinner, error banner) lives here.
+  const [guidedBusy, setGuidedBusy] = useState(false);
+  const [guidedBusyLabel, setGuidedBusyLabel] = useState('');
+  const [guidedError, setGuidedError] = useState<string | null>(null);
+  // If the final create step made a subject but the upload failed, remember it
+  // so retry re-uploads into the SAME subject instead of creating a duplicate.
+  const guidedCreatedSubject = useRef<{ id: number; name: string } | null>(null);
+  // Which guided operation failed, so "Try again" retries the RIGHT one:
+  // 'create' = create-new-subject path; 'reuse' = add-to-existing (collision).
+  const guidedRetryAction = useRef<'create' | 'reuse' | null>(null);
+  const guidedReuseTarget = useRef<SubjectItem | null>(null);
 
   useEffect(() => {
     loadSubjects();
@@ -114,92 +224,6 @@ export function HomeScreen({
     }
   };
 
-  // Creates a fresh subject from a file (analyzes it, auto-names from the
-  // AI-suggested title) and uploads the file into it. Used both when there are
-  // no subjects yet and when the user explicitly chooses "new subject".
-  const createNewSubjectFromFile = async (file: DocumentPicker.DocumentPickerAsset) => {
-    setIsUploading(true);
-    setUploadStatus('Analyzing document...');
-    try {
-      const extractResult = await extractTextAndSuggestTitle(
-        file.uri,
-        file.name,
-        file.mimeType || 'application/pdf',
-        (file as any).file
-      );
-      const suggestedTitle = extractResult.suggested_title || 'Study Notes';
-
-      setUploadStatus(`Creating "${suggestedTitle}"...`);
-      const newSub = await createSubject(suggestedTitle);
-
-      setUploadStatus('Indexing content...');
-      const uploaded = await uploadMaterial(
-        newSub.id,
-        file.uri,
-        file.name,
-        file.mimeType || 'application/pdf',
-        (file as any).file
-      );
-      await addMemoryEntry({
-        type: 'upload',
-        subjectId: newSub.id,
-        timestamp: new Date().toISOString(),
-        fileName: file.name,
-      });
-      await loadSubjects();
-      setIsUploading(false);
-      setUploadStatus('');
-      Alert.alert(
-        'Upload Successful! 📄',
-        `"${file.name}" was parsed (${uploaded.chunks_count} chunks) and added to "${suggestedTitle}".`,
-        [
-          {
-            text: 'View Notes',
-            onPress: () => onSelectSubject(apiToSubjectItem(newSub)),
-          },
-          { text: 'OK' },
-        ]
-      );
-    } catch {
-      setIsUploading(false);
-      setUploadStatus('');
-      // Fallback to generic title if extraction fails
-      setUploadStatus('Creating workspace...');
-      try {
-        const newSub = await createSubject('Study Notes');
-        const uploaded = await uploadMaterial(
-          newSub.id,
-          file.uri,
-          file.name,
-          file.mimeType || 'application/pdf',
-          (file as any).file
-        );
-        await addMemoryEntry({
-          type: 'upload',
-          subjectId: newSub.id,
-          timestamp: new Date().toISOString(),
-          fileName: file.name,
-        });
-        await loadSubjects();
-        setIsUploading(false);
-        setUploadStatus('');
-        Alert.alert(
-          'Upload Complete! 📄',
-          `"${file.name}" was parsed (${uploaded.chunks_count} chunks) indexed into "Study Notes".`,
-          [
-            {
-              text: 'Open Subject',
-              onPress: () => onSelectSubject(apiToSubjectItem(newSub)),
-            },
-            { text: 'OK' },
-          ]
-        );
-      } catch (fallbackErr: any) {
-        Alert.alert('Upload Error', fallbackErr.message || 'Could not upload file.');
-      }
-    }
-  };
-
   const handlePickDocument = async () => {
     try {
       const result = await DocumentPicker.getDocumentAsync({
@@ -215,14 +239,54 @@ export function HomeScreen({
       if (!result.canceled && result.assets && result.assets.length > 0) {
         const file = result.assets[0];
 
-        // No subjects yet — always create a new subject from the file.
-        // Otherwise ask the user: create a new subject or add to an existing one.
+        // No subjects yet -> nothing to reuse, so go straight into the guided
+        // create-subject thread (guard C). Skip the reuse check (it could only
+        // say "unknown" against an empty library).
         if (subjects.length === 0) {
-          await createNewSubjectFromFile(file);
-        } else {
-          setPendingFile(file);
-          setShowUploadTargetModal(true);
+          startGuidedCapture(file, '');
+          return;
         }
+
+        // Library is non-empty -> run the CHEAP reuse check first (guard E/K,
+        // decision 7). No AI call, no writes. A known file jumps straight to its
+        // subject's chat (skip naming); an unknown file proceeds to the
+        // new-vs-existing chooser.
+        setIsUploading(true);
+        setUploadStatus('Checking your library…');
+        let reuse: FileReuseCheckResult | null = null;
+        try {
+          reuse = await fileReuseCheck(
+            file.uri,
+            file.name,
+            file.mimeType || 'application/pdf',
+            (file as any).file
+          );
+        } catch {
+          reuse = null; // check failed -> treat as a new file, never block
+        }
+        setIsUploading(false);
+        setUploadStatus('');
+
+        if (reuse && reuse.known && reuse.existing_subject_id != null && onOpenChatWithSubject) {
+          // Guard K / decision 7: this exact file already lives in a subject.
+          // Continue there instead of creating a duplicate.
+          const existing =
+            subjects.find((s) => s.id === String(reuse!.existing_subject_id)) ??
+            ({
+              id: String(reuse.existing_subject_id),
+              name: reuse.existing_subject_name || 'that subject',
+              materialsCount: 1,
+              mastery: null,
+            } as SubjectItem);
+          onOpenChatWithSubject(existing, `Let's pick up where we left off with ${existing.name}.`);
+          return;
+        }
+
+        // Unknown file -> existing new-vs-existing chooser. The "create new
+        // subject" branch now launches the guided thread (see modal below).
+        setPendingFile(file);
+        setPendingFileHash(reuse ? reuse.content_hash : '');
+        setShowUploadTargetModal(true);
       }
     } catch (err: any) {
       setIsUploading(false);
@@ -268,14 +332,269 @@ export function HomeScreen({
     }
   };
 
-  const handleSubmit = () => {
-    if (!inputPrompt.trim()) return;
-    onSelectPrompt(inputPrompt.trim());
-    setInputPrompt('');
+  // --- Guided create-subject thread (Slice 4 remainder) ---
+  // Entry (guard C): a NEW source is attached. The cheap reuse check already
+  // ran in handlePickDocument; if the file is unknown we land here and walk the
+  // name → scope → output thread (decision 5). Answers are structured inputs
+  // (guard M2); the final create/upload gates on processing_status (M4/M5).
+
+  const startGuidedCapture = (file: DocumentPicker.DocumentPickerAsset, hash: string) => {
+    if (!onGuidedChange) return;
+    guidedCreatedSubject.current = null;
+    guidedRetryAction.current = null;
+    guidedReuseTarget.current = null;
+    setGuidedError(null);
+    setGuidedBusy(false);
+    setGuidedBusyLabel('');
+    onGuidedChange({
+      stage: 'name',
+      file: {
+        uri: file.uri,
+        name: file.name,
+        mimeType: file.mimeType,
+        size: file.size,
+        webFile: (file as any).file,
+      },
+      suggestedName: cleanFileName(file.name),
+      name: null,
+      scope: null,
+      section: null,
+      output: null,
+      contentHash: hash,
+    });
+  };
+
+  const handleGuidedName = (name: string) => {
+    if (!guided || !onGuidedChange) return;
+    onGuidedChange({ ...guided, name, stage: 'scope' });
+  };
+
+  const handleGuidedScope = (scope: GuidedScope, section: string | null) => {
+    if (!guided || !onGuidedChange) return;
+    onGuidedChange({ ...guided, scope, section, stage: 'output' });
+  };
+
+  const handleGuidedOutput = (output: GuidedOutput) => {
+    if (!guided || !onGuidedChange) return;
+    const next = { ...guided, output };
+    onGuidedChange(next);
+    finalizeGuided(next);
+  };
+
+  // Name collided with an existing subject and the user chose to add to it
+  // (guard M3 reuse branch). Uploads the file into that subject and hands off
+  // to its chat — no new subject is created.
+  const handleGuidedReuseExisting = async (subject: SubjectItem) => {
+    if (!guided) return;
+    guidedRetryAction.current = 'reuse';
+    guidedReuseTarget.current = subject;
+    setGuidedError(null);
+    setGuidedBusy(true);
+    setGuidedBusyLabel(`Adding to "${subject.name}"…`);
+    try {
+      const uploaded = await uploadMaterial(
+        parseInt(subject.id, 10),
+        guided.file.uri,
+        guided.file.name,
+        guided.file.mimeType || 'application/pdf',
+        guided.file.webFile as Blob | undefined
+      );
+      // Guard M4/M5: only hand off once indexing actually finished; surface a
+      // failed read distinctly from a still-indexing file.
+      if (uploaded.processing_status === 'failed') {
+        throw new Error('We couldn\'t read that file. It may be corrupted or password-protected.');
+      }
+      if (uploaded.processing_status !== 'done') {
+        throw new Error('The file was added but is still being indexed. Try again in a moment.');
+      }
+      await addMemoryEntry({
+        type: 'upload',
+        subjectId: parseInt(subject.id, 10),
+        timestamp: new Date().toISOString(),
+        fileName: guided.file.name,
+      });
+      await loadSubjects();
+      const prompt = composeGuidedPrompt({ ...guided, name: subject.name });
+      finishGuided(subject, prompt);
+    } catch (err: any) {
+      setGuidedBusy(false);
+      setGuidedBusyLabel('');
+      setGuidedError(err.message || 'Could not add the file to that subject.');
+    }
+  };
+
+  // Create the subject (if not already created on a prior failed attempt),
+  // upload the file, gate on processing_status (M4/M5), then hand off to chat.
+  const finalizeGuided = async (capture: GuidedCapture) => {
+    const name = capture.name || cleanFileName(capture.file.name);
+    guidedRetryAction.current = 'create';
+    setGuidedError(null);
+    setGuidedBusy(true);
+    try {
+      // Idempotent create (guard E): if a previous attempt already made the
+      // subject, reuse it instead of creating a duplicate.
+      let subject = guidedCreatedSubject.current;
+      if (!subject) {
+        setGuidedBusyLabel(`Creating "${name}"…`);
+        const created = await createSubject(name);
+        subject = { id: created.id, name: created.name };
+        guidedCreatedSubject.current = subject;
+      }
+
+      setGuidedBusyLabel('Indexing your source…');
+      const uploaded = await uploadMaterial(
+        subject.id,
+        capture.file.uri,
+        capture.file.name,
+        capture.file.mimeType || 'application/pdf',
+        capture.file.webFile as Blob | undefined
+      );
+
+      // Guard M4/M5: hand off only when indexing finished; surface failure with
+      // a retry (retry re-uploads into the SAME subject via guidedCreatedSubject).
+      if (uploaded.processing_status === 'failed') {
+        throw new Error('We couldn\'t read that file. It may be corrupted or password-protected.');
+      }
+      if (uploaded.processing_status !== 'done') {
+        throw new Error('Your source is still being indexed. Try again in a moment.');
+      }
+
+      await addMemoryEntry({
+        type: 'upload',
+        subjectId: subject.id,
+        timestamp: new Date().toISOString(),
+        fileName: capture.file.name,
+      });
+      await loadSubjects();
+
+      const prompt = composeGuidedPrompt(capture);
+      finishGuided({ id: String(subject.id), name: subject.name, materialsCount: 1, mastery: null }, prompt);
+    } catch (err: any) {
+      setGuidedBusy(false);
+      setGuidedBusyLabel('');
+      setGuidedError(err.message || 'Something went wrong while setting up your subject.');
+    }
+  };
+
+  // Shared success path: clear the capture, refresh, and hand off to grounded
+  // chat with the composed prompt (decision 6 / guard C → always Chat).
+  const finishGuided = (subject: SubjectItem, prompt: string) => {
+    setGuidedBusy(false);
+    setGuidedBusyLabel('');
+    setGuidedError(null);
+    guidedCreatedSubject.current = null;
+    guidedRetryAction.current = null;
+    guidedReuseTarget.current = null;
+    if (onGuidedChange) onGuidedChange(null);
+    if (onOpenChatWithSubject) {
+      onOpenChatWithSubject(subject, prompt);
+    } else {
+      onSelectSubject(subject);
+    }
+  };
+
+  const handleGuidedRetry = () => {
+    if (!guided) return;
+    // Retry the operation that actually failed: adding to an existing subject
+    // (collision branch) vs creating a new one. Never blindly re-create.
+    if (guidedRetryAction.current === 'reuse' && guidedReuseTarget.current) {
+      handleGuidedReuseExisting(guidedReuseTarget.current);
+    } else {
+      finalizeGuided(guided);
+    }
+  };
+
+  const handleGuidedCancel = () => {
+    setGuidedBusy(false);
+    setGuidedBusyLabel('');
+    setGuidedError(null);
+    guidedCreatedSubject.current = null;
+    guidedRetryAction.current = null;
+    guidedReuseTarget.current = null;
+    if (onGuidedChange) onGuidedChange(null);
+  };
+
+  // Smart study box (Slice 4): on submit, ask the backend which subject the
+  // question is about (global RAG match). A confident match hands off to that
+  // subject's grounded chat (decisions 1/2/3/6/7); no match or any error falls
+  // back to the existing intent router (Slice 2 fallback).
+  // Single owner of "submit a prompt from the Home box" — used by BOTH the Go
+  // button and the suggestion chips (fix 2026-08-28: chips used to take the old
+  // direct route to dedicated screens, bypassing the chat hub / decision 1).
+  // Returns true when the prompt was consumed (routed to chat or fallback).
+  const submitPromptText = async (prompt: string): Promise<boolean> => {
+    if (!prompt || isMatching) return false;
+
+    // Nothing uploaded yet -> nothing to ground in. Gate with guidance shown
+    // INLINE under the box (decision 1) — same place as the no-match notice,
+    // never a popup. Applies to every prompt type (quiz / flashcards / chat):
+    // all of them need a source to ground in. Keep the typed text so the user
+    // can hit go again right after uploading.
+    if (subjects.length === 0) {
+      setNoSourceNotice(
+        'Upload a source first — attach your notes with the paperclip so I can ' +
+          'ground my answers in them. Then send this again.'
+      );
+      return false;
+    }
+
+    setIsMatching(true);
+    setNoSourceNotice(null);
+    try {
+      const match = await searchSource(prompt);
+      if (match.matched && match.subject_id != null && onOpenChatWithSubject) {
+        const target = subjects.find((s) => s.id === String(match.subject_id));
+        if (target) {
+          onOpenChatWithSubject(target, prompt);
+          return true;
+        }
+      }
+      // No confident content match, but the library is NOT empty -> never
+      // dead-end (fix #15): fall back to the best name-matching subject and
+      // open ITS chat. The chat hub handles the request there (grounded RAG
+      // will answer from that subject's notes, or say what it can't find).
+      if (onOpenChatWithSubject) {
+        onOpenChatWithSubject(pickFallbackSubject(prompt, subjects), prompt);
+        return true;
+      }
+      setNoSourceNotice(
+        'No source in your library matches this. Attach the relevant notes with ' +
+          'the paperclip, or rephrase — answers come strictly from your uploaded materials.'
+      );
+      return false;
+    } catch {
+      // Backend unreachable -> degrade to the old behavior, never block.
+      onSelectPrompt(prompt);
+      return true;
+    } finally {
+      setIsMatching(false);
+    }
+  };
+
+  const handleSubmit = async () => {
+    const prompt = inputPrompt.trim();
+    if (!prompt) return;
+    const consumed = await submitPromptText(prompt);
+    // Keep the typed text on no-match so the user can rephrase (Slice 2).
+    if (consumed) setInputPrompt('');
+  };
+
+  // Live suggestion chips derived from what's being typed + the user's subjects.
+  const suggestionChips = useMemo(
+    () => buildSuggestions(inputPrompt, subjects),
+    [inputPrompt, subjects]
+  );
+
+  // Suggestion chips go through the SAME smart path as the Go button (fix
+  // 2026-08-28): match the subject → open ITS chat (the hub), never the old
+  // direct jump to quiz/summary/flashcards screens. Only clear the box when
+  // the prompt was actually consumed.
+  const handlePickSuggestion = async (suggestion: string) => {
+    const consumed = await submitPromptText(suggestion);
+    if (consumed) setInputPrompt('');
   };
 
   const hasSubjects = subjects.length > 0;
-  const continueSubject = hasSubjects ? subjects[0] : null;
 
   const totalNotes = subjects.reduce((s, sub) => s + sub.materialsCount, 0);
   const assessedSubjects = subjects.filter((sub) => sub.mastery != null);
@@ -292,6 +611,24 @@ export function HomeScreen({
     : history.filter((a) => a.subjectId == null || subjectIds.has(String(a.subjectId)));
 
   const quizCount = visibleHistory.length;
+
+  // "Continue Studying" should reflect real recent activity, not just the first
+  // subject in the list. Use the most recent quiz attempt whose subject still
+  // exists (visibleHistory is already filtered to existing subjects).
+  const lastAttempt = visibleHistory.reduce<QuizAttempt | null>(
+    (latest, a) => (latest == null || (a.createdAt && a.createdAt >= latest.createdAt) ? a : latest),
+    null
+  );
+  const continueSubjectId = lastAttempt?.subjectId != null ? String(lastAttempt.subjectId) : null;
+  const continueSubject = hasSubjects
+    ? continueSubjectId
+      ? subjects.find((s) => s.id === continueSubjectId) ?? subjects[0]
+      : subjects[0]
+    : null;
+
+  // Presentation precedence for the subject/quiz areas: error > initial-loading > content.
+  const showLoadError = subjectsLoadFailed && subjects.length === 0;
+  const isInitialLoading = isLoading && subjects.length === 0 && !subjectsLoadFailed;
 
   // Personalized study-pulse headline derived from the loaded subjects.
   const recommendation = useMemo(() => buildRecommendation(subjects), [subjects]);
@@ -312,7 +649,10 @@ export function HomeScreen({
               placeholder="What are we studying today?"
               placeholderTextColor={colors.textPlaceholder}
               value={inputPrompt}
-              onChangeText={setInputPrompt}
+              onChangeText={(text) => {
+                setInputPrompt(text);
+                if (noSourceNotice) setNoSourceNotice(null);
+              }}
               onSubmitEditing={handleSubmit}
               returnKeyType="go"
               style={styles.inputField}
@@ -331,11 +671,61 @@ export function HomeScreen({
             </Pressable>
           </View>
 
+          {suggestionChips.length > 0 && (
+            <View style={styles.suggestionList}>
+              {suggestionChips.map((chip) => (
+                <Pressable
+                  key={chip}
+                  onPress={() => handlePickSuggestion(chip)}
+                  style={({ pressed }) => [
+                    styles.suggestionCard,
+                    pressed && styles.suggestionCardPressed,
+                  ]}
+                >
+                  <SparklesIcon size={16} color={colors.brandGreen} />
+                  <Text style={styles.suggestionCardText}>{chip}</Text>
+                </Pressable>
+              ))}
+            </View>
+          )}
+
           {isUploading && (
             <View style={styles.uploadProgressRow}>
               <ActivityIndicator size="small" color={colors.brandGreen} />
               <Text style={styles.uploadProgressText}>{uploadStatus || 'Processing file...'}</Text>
             </View>
+          )}
+
+          {isMatching && (
+            <View style={styles.uploadProgressRow}>
+              <ActivityIndicator size="small" color={colors.brandGreen} />
+              <Text style={styles.uploadProgressText}>Finding the right subject…</Text>
+            </View>
+          )}
+
+          {noSourceNotice && (
+            <View style={styles.noSourceNotice}>
+              <Text style={styles.noSourceNoticeText}>{noSourceNotice}</Text>
+            </View>
+          )}
+
+          {/* Guided create-subject thread (Slice 4): expands under the box when
+              a NEW source is attached. Asks name → scope → output, then creates
+              the subject and hands off to grounded chat. */}
+          {guided && onGuidedChange && (
+            <GuidedCaptureThread
+              capture={guided}
+              subjects={subjects}
+              busy={guidedBusy}
+              busyLabel={guidedBusyLabel}
+              error={guidedError}
+              onAnswerName={handleGuidedName}
+              onAnswerScope={handleGuidedScope}
+              onAnswerOutput={handleGuidedOutput}
+              onReuseExisting={handleGuidedReuseExisting}
+              onRetry={handleGuidedRetry}
+              onCancel={handleGuidedCancel}
+            />
           )}
 
           <View style={styles.summaryCard}>
@@ -352,7 +742,7 @@ export function HomeScreen({
                 <Text style={styles.metricLabel}>notes</Text>
               </View>
               <View style={styles.metricPill}>
-                <Text style={styles.metricValue}>{avgMastery}%</Text>
+                <Text style={styles.metricValue}>{assessedSubjects.length ? `${avgMastery}%` : '—'}</Text>
                 <Text style={styles.metricLabel}>mastery</Text>
               </View>
               <View style={styles.metricPill}>
@@ -373,6 +763,18 @@ export function HomeScreen({
             />
           </View>
         </View>
+
+        {showLoadError && (
+          <View style={styles.errorBanner}>
+            <Text style={styles.errorText}>Couldn’t reach the server. Check your connection and try again.</Text>
+            <Pressable
+              onPress={loadSubjects}
+              style={({ pressed }) => [styles.retryBtn, pressed && styles.cardPressed]}
+            >
+              <Text style={styles.retryBtnText}>Retry</Text>
+            </Pressable>
+          </View>
+        )}
 
         <View style={styles.divider} />
 
@@ -396,6 +798,20 @@ export function HomeScreen({
                   {continueSubject.materialsCount} study material(s) • {masteryLabel(continueSubject.mastery)}
                 </Text>
               </View>
+            </Pressable>
+          ) : isInitialLoading ? (
+            <SkeletonList rows={1} />
+          ) : showLoadError ? (
+            <Pressable
+              accessibilityLabel="Retry loading subjects"
+              onPress={loadSubjects}
+              style={({ pressed }) => [styles.emptyStateCard, pressed && styles.cardPressed]}
+            >
+              <View style={styles.emptyIconBadge}>
+                <PaperclipIcon size={20} color={colors.brandGreen} />
+              </View>
+              <Text style={styles.emptyStateTitle}>Couldn’t load your subjects</Text>
+              <Text style={styles.emptyStateSubtitle}>Tap to retry.</Text>
             </Pressable>
           ) : (
             <Pressable
@@ -424,24 +840,58 @@ export function HomeScreen({
           </View>
 
           {hasSubjects ? (
+            <View>
             <View style={styles.subjectsList}>
-              {subjects.map((sub) => (
+              {subjects.slice(0, 5).map((sub) => (
                 <Pressable
                   key={sub.id}
                   accessibilityLabel={`Open subject ${sub.name}`}
                   onPress={() => onSelectSubject(sub)}
                   style={({ pressed }) => [styles.subjectRow, pressed && styles.cardPressed]}
                 >
-                  <Text style={styles.subjectName}>{sub.name}</Text>
+                  <Text style={styles.subjectName} numberOfLines={2}>{sub.name}</Text>
                   <View style={styles.subjectMasteryWrap}>
                     <MasteryProgressBar percentage={sub.mastery} width={90} />
                   </View>
                 </Pressable>
               ))}
             </View>
+            {subjects.length > 5 && (
+              <Pressable
+                accessibilityLabel="View all subjects"
+                onPress={onOpenMenu}
+                style={({ pressed }) => [styles.viewAllRow, pressed && styles.cardPressed]}
+              >
+                <Text style={styles.viewAllText}>View all {subjects.length} subjects</Text>
+                <ChevronRightIcon size={16} color={colors.textMuted} />
+              </Pressable>
+            )}
+            </View>
+          ) : isInitialLoading ? (
+            <SkeletonList rows={3} />
+          ) : showLoadError ? (
+            <View style={styles.errorCard}>
+              <Text style={styles.errorTitle}>Couldn’t load your subjects</Text>
+              <Text style={styles.errorSubtitle}>
+                The study backend is unreachable. Check your connection and try again.
+              </Text>
+              <Pressable
+                accessibilityLabel="Retry loading subjects"
+                onPress={loadSubjects}
+                style={({ pressed }) => [styles.retryPill, pressed && styles.retryPillPressed]}
+              >
+                <Text style={styles.retryPillText}>Retry</Text>
+              </Pressable>
+            </View>
           ) : (
-            <View style={styles.emptySubjectsBox}>
-              <Text style={styles.emptySubjectsText}>Your created subjects will appear here.</Text>
+            <View style={styles.emptyStateCard}>
+              <View style={styles.emptyIconBadge}>
+                <FolderIcon size={20} color={colors.brandGreenDark} />
+              </View>
+              <Text style={styles.emptyStateTitle}>No subjects yet</Text>
+              <Text style={styles.emptyStateSubtitle}>
+                Subjects you create will appear here. Add your first one to start studying.
+              </Text>
             </View>
           )}
         </View>
@@ -452,30 +902,54 @@ export function HomeScreen({
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Recent quizzes</Text>
           {visibleHistory.length > 0 ? (
+            <View>
             <View style={styles.quizHistoryList}>
-              {visibleHistory.map((attempt) => (
+              {(showAllQuizzes ? visibleHistory : visibleHistory.slice(0, 5)).map((attempt) => (
                 <Pressable
                   key={attempt.id}
                   accessibilityLabel={`Open quiz result for ${attempt.subjectName}`}
                   onPress={() => onOpenQuizResult(attempt)}
                   style={({ pressed }) => [styles.quizHistoryRow, pressed && styles.cardPressed]}
                 >
-                  <View style={[styles.quizHistoryDot, { backgroundColor: quizBand(attempt.pct) }]} />
-                  <View style={styles.quizHistoryInfo}>
-                    <Text style={styles.quizHistorySubject}>{attempt.subjectName}</Text>
+                  <View style={styles.quizTopRow}>
+                    <View style={[styles.quizHistoryDot, { backgroundColor: quizBand(attempt.pct) }]} />
+                    <Text style={styles.quizHistorySubject} numberOfLines={2}>{attempt.subjectName}</Text>
+                  </View>
+                  <View style={styles.quizBottomRow}>
                     <Text style={styles.quizHistoryMeta}>
                       {attempt.score}/{attempt.total} • {attempt.pct}%
                       {attempt.difficulty ? ` • ${attempt.difficulty}` : ''}
                     </Text>
+                    <View style={styles.quizBottomRight}>
+                      <Text style={styles.quizHistoryDate}>{formatAttemptDate(attempt.createdAt)}</Text>
+                      <ChevronRightIcon size={16} color={colors.textMuted} />
+                    </View>
                   </View>
-                  <Text style={styles.quizHistoryDate}>{formatAttemptDate(attempt.createdAt)}</Text>
-                  <ChevronRightIcon size={16} color={colors.textMuted} />
                 </Pressable>
               ))}
             </View>
+            {visibleHistory.length > 5 && !showAllQuizzes && (
+              <Pressable
+                accessibilityLabel="Show all quizzes"
+                onPress={() => setShowAllQuizzes(true)}
+                style={({ pressed }) => [styles.viewAllRow, pressed && styles.cardPressed]}
+              >
+                <Text style={styles.viewAllText}>Show all {visibleHistory.length} quizzes</Text>
+                <ChevronRightIcon size={16} color={colors.textMuted} />
+              </Pressable>
+            )}
+            </View>
+          ) : isInitialLoading ? (
+            <SkeletonList rows={2} />
           ) : (
-            <View style={styles.emptySubjectsBox}>
-              <Text style={styles.emptySubjectsText}>No quizzes yet — finish a quiz to track it here.</Text>
+            <View style={styles.emptyStateCard}>
+              <View style={styles.emptyIconBadge}>
+                <ClockIcon size={20} color={colors.brandGreenDark} />
+              </View>
+              <Text style={styles.emptyStateTitle}>No quizzes yet</Text>
+              <Text style={styles.emptyStateSubtitle}>
+                Finished quizzes will show up here so you can track your progress.
+              </Text>
             </View>
           )}
         </View>
@@ -498,7 +972,9 @@ export function HomeScreen({
               accessibilityLabel="Create new subject"
               onPress={() => {
                 setShowUploadTargetModal(false);
-                if (pendingFile) createNewSubjectFromFile(pendingFile);
+                // Guided create-subject thread (Slice 4): name → scope → output,
+                // then create + upload + hand off to grounded chat.
+                if (pendingFile) startGuidedCapture(pendingFile, pendingFileHash);
               }}
               style={({ pressed }) => [styles.modalSubjectItem, pressed && styles.cardPressed]}
             >
@@ -575,6 +1051,48 @@ const styles = StyleSheet.create({
   promptSection: {
     paddingTop: 22,
     paddingBottom: 20,
+  },
+  noSourceNotice: {
+    marginTop: 10,
+    backgroundColor: '#FBF3E4',
+    borderWidth: 1,
+    borderColor: '#EBD9B4',
+    borderRadius: 14,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+  },
+  noSourceNoticeText: {
+    fontFamily: typography.sansRegular,
+    fontSize: 13,
+    lineHeight: 19,
+    color: '#6B5A2E',
+  },
+  suggestionList: {
+    marginTop: 10,
+    gap: 8,
+  },
+  suggestionCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.borderLight,
+    borderRadius: 14,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+  },
+  suggestionCardPressed: {
+    opacity: 0.7,
+    transform: [{ scale: 0.99 }],
+  },
+  suggestionCardText: {
+    flex: 1,
+    flexShrink: 1,
+    fontFamily: typography.sansRegular,
+    fontSize: 14,
+    lineHeight: 20,
+    color: colors.textPrimary,
   },
   promptRow: {
     flexDirection: 'row',
@@ -754,19 +1272,20 @@ const styles = StyleSheet.create({
     marginTop: 4,
   },
   emptyStateCard: {
-    padding: 24,
+    paddingVertical: 30,
+    paddingHorizontal: 24,
     backgroundColor: '#FFFFFF',
-    borderRadius: 12,
+    borderRadius: 18,
     borderWidth: 1,
     borderColor: colors.borderMedium,
     borderStyle: 'dashed',
     alignItems: 'center',
-    gap: 8,
+    gap: 10,
   },
   emptyIconBadge: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
+    width: 46,
+    height: 46,
+    borderRadius: 23,
     backgroundColor: colors.sageBadge,
     alignItems: 'center',
     justifyContent: 'center',
@@ -774,15 +1293,60 @@ const styles = StyleSheet.create({
   },
   emptyStateTitle: {
     fontFamily: typography.serifSemiBold,
-    fontSize: 16,
-    color: colors.textPrimary,
+    fontSize: 17,
+    color: colors.brandGreenDark,
+    letterSpacing: -0.2,
   },
   emptyStateSubtitle: {
     fontFamily: typography.sansRegular,
     fontSize: 13,
     color: colors.textMuted,
     textAlign: 'center',
-    lineHeight: 18,
+    lineHeight: 20,
+    letterSpacing: 0.1,
+    paddingHorizontal: 6,
+  },
+  errorCard: {
+    paddingVertical: 28,
+    paddingHorizontal: 22,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: colors.borderLight,
+    alignItems: 'center',
+    gap: 8,
+  },
+  errorTitle: {
+    fontFamily: typography.serifSemiBold,
+    fontSize: 16,
+    color: colors.textPrimary,
+    marginTop: 2,
+  },
+  errorSubtitle: {
+    fontFamily: typography.sansRegular,
+    fontSize: 13,
+    color: colors.textMuted,
+    textAlign: 'center',
+    lineHeight: 20,
+    letterSpacing: 0.1,
+    paddingHorizontal: 6,
+  },
+  retryPill: {
+    marginTop: 6,
+    height: 40,
+    paddingHorizontal: 24,
+    borderRadius: 20,
+    backgroundColor: colors.brandGreen,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  retryPillPressed: {
+    opacity: 0.85,
+  },
+  retryPillText: {
+    fontFamily: typography.sansSemiBold,
+    fontSize: 14,
+    color: '#FFFFFF',
   },
   subjectsList: {
     backgroundColor: '#FFFFFF',
@@ -797,34 +1361,21 @@ const styles = StyleSheet.create({
     elevation: 2,
   },
   subjectRow: {
-    height: 64,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
+    paddingVertical: 12,
+    flexDirection: 'column',
+    alignItems: 'stretch',
+    justifyContent: 'center',
     borderBottomWidth: 1,
     borderBottomColor: colors.borderLight,
   },
   subjectName: {
     fontFamily: typography.sansMedium,
     fontSize: 16,
+    lineHeight: 21,
     color: colors.textPrimary,
-    flex: 1,
-    flexShrink: 1,
-    marginRight: 12,
   },
   subjectMasteryWrap: {
-    flexShrink: 0,
-  },
-  emptySubjectsBox: {
-    padding: 24,
-    backgroundColor: '#FAFBF8',
-    borderRadius: 12,
-    alignItems: 'center',
-  },
-  emptySubjectsText: {
-    fontFamily: typography.sansRegular,
-    fontSize: 13,
-    color: colors.textMuted,
+    marginTop: 8,
   },
   quizHistoryList: {
     backgroundColor: '#FFFFFF',
@@ -839,24 +1390,40 @@ const styles = StyleSheet.create({
     elevation: 2,
   },
   quizHistoryRow: {
-    height: 64,
+    paddingVertical: 12,
+    flexDirection: 'column',
+    alignItems: 'stretch',
+    justifyContent: 'center',
+    gap: 8,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.borderLight,
+  },
+  quizTopRow: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.borderLight,
+  },
+  quizBottomRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  quizBottomRight: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
   },
   quizHistoryDot: {
     width: 12,
     height: 12,
     borderRadius: 6,
   },
-  quizHistoryInfo: {
-    flex: 1,
-  },
   quizHistorySubject: {
+    flex: 1,
+    flexShrink: 1,
     fontFamily: typography.sansMedium,
     fontSize: 16,
+    lineHeight: 21,
     color: colors.textPrimary,
   },
   quizHistoryMeta: {
@@ -933,5 +1500,63 @@ const styles = StyleSheet.create({
     fontFamily: typography.sansMedium,
     fontSize: 15,
     color: colors.textPrimary,
+  },
+  errorBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: '#FDECEC',
+    borderWidth: 1,
+    borderColor: '#F3C9C9',
+    borderRadius: 14,
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+    marginTop: 18,
+    gap: 12,
+  },
+  errorText: {
+    flex: 1,
+    fontFamily: typography.sansRegular,
+    fontSize: 13,
+    color: colors.error,
+    lineHeight: 18,
+  },
+  retryBtn: {
+    backgroundColor: colors.error,
+    borderRadius: 12,
+    paddingVertical: 10,
+    paddingHorizontal: 18,
+  },
+  retryBtnText: {
+    fontFamily: typography.sansMedium,
+    fontSize: 13,
+    color: '#FFFFFF',
+  },
+  viewAllRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginTop: 10,
+    paddingVertical: 10,
+    paddingHorizontal: 4,
+  },
+  viewAllText: {
+    fontFamily: typography.sansMedium,
+    fontSize: 14,
+    color: colors.brandGreen,
+  },
+  skeletonList: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: colors.borderLight,
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+  },
+  skeletonRow: {
+    height: 56,
+    borderRadius: 12,
+    backgroundColor: '#EDEFEA',
+    marginVertical: 6,
   },
 });

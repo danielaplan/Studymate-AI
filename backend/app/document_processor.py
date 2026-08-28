@@ -254,3 +254,18 @@ def delete_material_chunks(material_id: int) -> None:
         collection.delete(where={"material_id": material_id})
     except Exception as e:
         logger.warning(f"Failed to delete chunks for material {material_id}: {e}")
+
+
+def delete_subject_chunks(subject_id: int) -> None:
+    """Remove all vectors for a given subject from ChromaDB (Slice 0.5).
+
+    Without this, deleting a subject orphans its chunks (tagged with the dead
+    subject_id), which global source-search would then incorrectly match.
+    """
+    collection = _get_chroma_collection()
+    if collection is None:
+        return
+    try:
+        collection.delete(where={"subject_id": subject_id})
+    except Exception as e:
+        logger.warning(f"Failed to delete chunks for subject {subject_id}: {e}")

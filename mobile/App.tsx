@@ -18,9 +18,10 @@ import {
 } from '@expo-google-fonts/inter';
 
 import { colors } from './src/theme';
-import { ScreenName, TabName, SubjectItem, QuizAttempt } from './src/types';
+import { ScreenName, TabName, SubjectItem, QuizAttempt, GuidedCapture } from './src/types';
 import { BottomNav } from './src/components/BottomNav';
 import { MaterialAPI, SummaryAPI } from './src/api/client';
+import { resolveRouting } from './src/utils/intent';
 import QuizOverview from './src/screens/QuizOverview';
 
 // Screenskimi
@@ -60,6 +61,10 @@ export default function App() {
   const [quizPrefs, setQuizPrefs] = useState<QuizPrefs | null>(null);
   const [flashcardPrefs, setFlashcardPrefs] = useState<CardsPrefs | null>(null);
   const [selectedAttempt, setSelectedAttempt] = useState<QuizAttempt | null>(null);
+  // Guided create-subject thread (Slice 4 remainder): durable capture state is
+  // lifted HERE (guard M1) so the in-progress name/scope/output answers survive
+  // HomeScreen unmounting when the user navigates away mid-flow.
+  const [guidedCapture, setGuidedCapture] = useState<GuidedCapture | null>(null);
   const fadeAnim = useRef(new Animated.Value(0)).current;
   const translateY = useRef(new Animated.Value(18)).current;
 
@@ -113,16 +118,35 @@ export default function App() {
 
   // Screen routing handlers
   const handleOpenPrompt = (promptText: string) => {
-    if (promptText.toLowerCase().includes('quiz')) {
-      setCurrentScreen('quiz');
-    } else if (promptText.toLowerCase().includes('summar')) {
-      setCurrentScreen('summary');
-    } else {
-      setChatExplainTerms(null);
-      setChatPrompt(promptText);
-      setActiveTab('chat');
-      setCurrentScreen('chat');
+    // Plain box (not the guided smart-box flow yet): use the intent router.
+    switch (resolveRouting(promptText, false)) {
+      case 'quiz':
+        setCurrentScreen('quiz');
+        break;
+      case 'summary':
+        setCurrentScreen('summary');
+        break;
+      case 'flashcards':
+        setCurrentScreen('flashcards');
+        break;
+      case 'chat':
+      default:
+        setChatExplainTerms(null);
+        setChatPrompt(promptText);
+        setActiveTab('chat');
+        setCurrentScreen('chat');
+        break;
     }
+  };
+
+  // Smart study box handoff (Slice 4): open grounded chat in a matched subject
+  // with the user's prompt pre-filled (decision 6: pre-fill, you send).
+  const handleOpenChatWithSubject = (subject: SubjectItem, prompt: string) => {
+    setSelectedSubject(subject);
+    setChatExplainTerms(null);
+    setChatPrompt(prompt);
+    setActiveTab('chat');
+    setCurrentScreen('chat');
   };
 
   const handleOpenSubject = (subject: SubjectItem) => {
@@ -177,6 +201,9 @@ export default function App() {
               }
             }}
             onSelectSubject={handleOpenSubject}
+            onOpenChatWithSubject={handleOpenChatWithSubject}
+            guided={guidedCapture}
+            onGuidedChange={setGuidedCapture}
             onOpenQuizResult={(attempt) => {
               if (attempt.subjectId !== null) {
                 setSelectedSubject({
@@ -210,6 +237,23 @@ export default function App() {
             initialSummary={expandedSummary ?? undefined}
             explainTerms={chatExplainTerms}
             onSummaryConsumed={() => setExpandedSummary(null)}
+            onStartQuiz={(prefs) => {
+              setQuizPrefs({
+                source: 'all',
+                questionCount: prefs.questionCount,
+                difficulty: prefs.difficulty,
+                timeLimit: prefs.timeLimit,
+              });
+              setCurrentScreen('quiz');
+            }}
+            onStartCards={(prefs) => {
+              setFlashcardPrefs({
+                source: 'all',
+                cardCount: prefs.cardCount,
+                focus: prefs.focus,
+              });
+              setCurrentScreen('flashcards');
+            }}
           />
         );
 

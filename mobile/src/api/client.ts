@@ -64,6 +64,24 @@ export const createSubject = (name: string, description?: string) =>
 export const deleteSubject = (id: number) =>
   fetch(`${API_URL}/api/subjects/${id}`, { method: 'DELETE' });
 
+// ---------------------------------------------------------------------------
+// Global source-match (smart study box, Slice 1 backend)
+// ---------------------------------------------------------------------------
+export interface SourceMatchResult {
+  matched: boolean;
+  weak?: boolean;
+  subject_id?: number;
+  subject_name?: string;
+  top_score?: number;
+  margin?: number;
+}
+
+export const searchSource = (question: string) =>
+  apiRequest<SourceMatchResult>('/api/search/source', {
+    method: 'POST',
+    body: JSON.stringify({ question }),
+  });
+
 export interface SubjectUpdate {
   name?: string;
   description?: string;
@@ -137,6 +155,54 @@ export interface ExtractTextResponse {
   suggested_title: string;
   file_type: string;
 }
+
+// ---------------------------------------------------------------------------
+// File reuse check (smart study box guided flow, Slice 4 guard E/K)
+// ---------------------------------------------------------------------------
+export interface FileReuseCheckResult {
+  content_hash: string;
+  known: boolean;
+  existing_subject_id?: number | null;
+  existing_subject_name?: string | null;
+  already_processed?: boolean;
+}
+
+// Cheap file-identity check: hashes the file server-side and reports whether it
+// already belongs to a subject. No AI call, no writes. Runs BEFORE any AI spend
+// so a known file can jump straight to its subject's chat (guard K).
+export const fileReuseCheck = async (
+  fileUri: string,
+  fileName: string,
+  mimeType: string = 'application/pdf',
+  fileBlob?: Blob
+): Promise<FileReuseCheckResult> => {
+  const formData = new FormData();
+  if (Platform.OS === 'web') {
+    if (fileBlob) {
+      formData.append('file', fileBlob, fileName);
+    } else {
+      const fetchRes = await fetch(fileUri);
+      const blob = await fetchRes.blob();
+      formData.append('file', blob, fileName);
+    }
+  } else {
+    formData.append('file', {
+      uri: fileUri,
+      name: fileName,
+      type: mimeType || 'application/pdf',
+    } as any);
+  }
+
+  const res = await fetch(`${API_URL}/api/files/reuse-check`, {
+    method: 'POST',
+    body: formData,
+  });
+  if (!res.ok) {
+    const err = await res.text();
+    throw new Error(`Reuse check failed (${res.status}): ${err}`);
+  }
+  return res.json();
+};
 
 export const extractTextAndSuggestTitle = async (fileUri: string, fileName: string, mimeType: string = 'application/pdf', fileBlob?: Blob): Promise<ExtractTextResponse> => {
   const formData = new FormData();

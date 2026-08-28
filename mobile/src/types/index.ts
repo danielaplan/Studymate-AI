@@ -88,6 +88,88 @@ export interface ChatMessage {
   materialTag?: string;
   bulletPoints?: { title: string; content: string }[];
   summary?: SummaryAPI;
+  // Chat-hub launcher card: a ready-to-open quiz or flashcard deck. Tapping the
+  // button hands off to the existing QuizScreen / FlashcardsScreen with prefs.
+  action?: ChatAction;
+  // Chat-hub conversational setup question (asked in-thread, chips inline).
+  setup?: ChatSetupQuestion;
+}
+
+// Launcher card payload rendered inside a chat bubble (chat-hub feature).
+export interface ChatAction {
+  kind: 'quiz' | 'flashcards';
+  label: string; // e.g. "10-question hard quiz on Neuro Week 3"
+  // Quiz prefs (when kind === 'quiz')
+  questionCount?: number;
+  difficulty?: 'easy' | 'medium' | 'hard';
+  timeLimit?: number | null; // minutes, or null = off (added 2026-08-28)
+  // Flashcard prefs (when kind === 'flashcards')
+  cardCount?: number;
+  focus?: 'definitions' | 'concepts' | 'qa';
+}
+
+// One setup question asked CONVERSATIONALLY inside the chat thread (chat-hub
+// feature, user feedback 2026-08-28: setup must feel like a chat conversation,
+// not a bar above the input). Lives on the AI message that asks it; the chips
+// render only while that message is the LAST one (i.e. still unanswered).
+// Tapping a chip strips `setup` (question answered) and records the answer as
+// the user's own bubble.
+export interface ChatSetupQuestion {
+  kind: 'quiz' | 'flashcards';
+  // 'choice' is the ambiguous-request stage (user said "review me" without
+  // naming a format): offer Quiz / Flashcards / Summary. Then quiz:
+  // count -> difficulty -> time; flashcards: count -> focus.
+  stage: 'choice' | 'count' | 'difficulty' | 'time' | 'focus';
+  // Answers collected on previous turns, carried forward stage by stage.
+  count?: number;
+  difficulty?: 'easy' | 'medium' | 'hard'; // carried into the quiz 'time' stage
+}
+
+// ---------------------------------------------------------------------------
+// Guided create-subject thread (Slice 4 remainder — decisions 4/5/7, guards
+// C/D/E/K, M1–M6). When a NEW source is attached (its content_hash belongs to
+// no subject yet), the smart box expands into a mini chat thread that asks,
+// one at a time: name → scope → output. It then creates the subject from that
+// file and hands off to grounded chat. State is LIFTED to App level (M1) so it
+// survives screen unmount; answers are captured with structured inputs (text
+// field for name, chips for scope/output) — never per-turn LLM parsing (M2).
+// ---------------------------------------------------------------------------
+
+// One question per turn, in this fixed order (decision 5).
+export type GuidedStage = 'name' | 'scope' | 'output';
+
+// Scope: study the whole document, or just a section the user names (decision 5b).
+export type GuidedScope = 'whole' | 'section';
+
+// Output: which first-class deliverable to steer toward (decision 5c). 'chat'
+// is the default grounded-chat handoff; the others pre-fill a chat prompt that
+// asks for that deliverable so the user still reviews + sends (decision 6).
+export type GuidedOutput = 'guide' | 'quiz' | 'flashcards' | 'chat';
+
+// Minimal, serializable view of a picked file so the guided state can live in
+// App without importing expo-document-picker types into the shared types file.
+export interface GuidedFile {
+  uri: string;
+  name: string;
+  mimeType?: string;
+  size?: number;
+  // Web-only Blob handle from expo-document-picker (`(asset as any).file`).
+  webFile?: unknown;
+}
+
+export interface GuidedCapture {
+  stage: GuidedStage;
+  file: GuidedFile;
+  // AI-suggested subject name, used to pre-fill the name field.
+  suggestedName: string;
+  // Answers collected so far (null until that turn is answered).
+  name: string | null;
+  scope: GuidedScope | null;
+  // When scope === 'section', the section the user typed.
+  section: string | null;
+  output: GuidedOutput | null;
+  // content_hash of the file (guard E/K) — lets the final create step dedupe.
+  contentHash: string;
 }
 
 export interface SummaryDocument {

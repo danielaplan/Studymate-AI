@@ -20,6 +20,7 @@ Full RAG pipeline endpoints:
 from __future__ import annotations
 
 import datetime
+import hashlib
 import json
 import logging
 import math
@@ -45,13 +46,16 @@ from .database import (
     QuizQuestion,
     Subject,
     TextChunk,
+    find_material_by_hash,
     get_db,
     init_db,
 )
 from .document_processor import (
+    _get_chroma_collection,
     chunk_text,
     clean_text,
     delete_material_chunks,
+    delete_subject_chunks,
     extract_text,
     retrieve_relevant_chunks,
     store_chunks_in_vector_db,
@@ -282,8 +286,83 @@ async def delete_subject(subject_id: int, db: AsyncSession = Depends(get_db)):
     subject = await db.get(Subject, subject_id)
     if not subject:
         raise HTTPException(status_code=404, detail="Subject not found.")
+    # Slice 0.5: purge this subject's vectors so they can't be matched after deletion.
+    delete_subject_chunks(subject_id)
     await db.delete(subject)
     await db.commit()
+
+
+class SourceSearchRequest(BaseModel):
+    question: str
+    user_id: Optional[int] = None  # reserved for per-user scoping (Slice 5)
+
+
+@app.post("/api/search/source")
+async def search_source(
+    request: SourceSearchRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """Global source-match (Slice 1): find which subject a question is about.
+
+    Embeds the question, searches ALL chunks (no subject filter), and returns the
+    owning subject_id with a confidence score. Never returns chunk content (guard G).
+    """
+    collection = _get_chroma_collection()
+    if collection is None:
+        return {"matched": False}
+
+    try:
+        results = collection.query(
+            query_texts=[request.question],
+            n_results=10,
+            include=["metadatas", "distances"],
+        )
+    except Exception as e:
+        logger.warning(f"Global source search failed: {e}")
+        return {"matched": False}
+
+    ids = results.get("ids", [[]])[0]
+    if not ids:
+        return {"matched": False}
+
+    distances = results.get("distances", [[]])[0]
+    metadatas = results.get("metadatas", [[]])[0]
+
+    # Best similarity (1 - cosine distance) per subject.
+    best_by_subject: dict = {}
+    for dist, meta in zip(distances, metadatas):
+        if not meta:
+            continue
+        sid = meta.get("subject_id")
+        if sid is None:
+            continue
+        sim = 1.0 - float(dist)
+        if sid not in best_by_subject or sim > best_by_subject[sid]:
+            best_by_subject[sid] = sim
+
+    if not best_by_subject:
+        return {"matched": False}
+
+    top_subject = max(best_by_subject, key=lambda s: best_by_subject[s])
+    top_score = best_by_subject[top_subject]
+    others = [v for s, v in best_by_subject.items() if s != top_subject]
+    margin = top_score - (max(others) if others else 0.0)
+
+    # Defensive: an orphaned chunk (deleted subject) must never match (hole A).
+    subject = await db.get(Subject, top_subject)
+    if subject is None:
+        return {"matched": False}
+
+    matched = top_score >= 0.20 and margin >= 0.05
+    weak = matched and top_score < 0.30
+    return {
+        "matched": matched,
+        "weak": weak,
+        "subject_id": top_subject,
+        "subject_name": subject.name,
+        "top_score": round(top_score, 4),
+        "margin": round(margin, 4),
+    }
 
 
 class SubjectUpdate(BaseModel):
@@ -384,6 +463,7 @@ async def upload_material(
 
     file_bytes = await file.read()
     file_size = len(file_bytes)
+    content_hash = hashlib.sha256(file_bytes).hexdigest()
     if file_size == 0:
         raise HTTPException(status_code=400, detail="The uploaded file is empty.")
     if file_size > MAX_UPLOAD_SIZE:
@@ -402,6 +482,7 @@ async def upload_material(
         file_path=str(save_path),
         file_type=file_type,
         file_size_bytes=file_size,
+        content_hash=content_hash,
         processing_status="processing",
     )
     db.add(material)
@@ -452,6 +533,55 @@ async def upload_material(
         file_size_bytes=material.file_size_bytes,
         processing_status=material.processing_status,
         chunks_count=chunks_count,
+    )
+
+
+class FileReuseCheckResponse(BaseModel):
+    content_hash: str
+    # Does this exact file already live in a subject? (guard E/K, decision 7)
+    known: bool
+    existing_subject_id: Optional[int] = None
+    existing_subject_name: Optional[str] = None
+    # Did the existing copy finish indexing? Drives the M4/M5 handoff gate.
+    already_processed: bool = False
+
+
+@app.post("/api/files/reuse-check", response_model=FileReuseCheckResponse)
+async def file_reuse_check(
+    file: UploadFile = File(...),
+    db: AsyncSession = Depends(get_db),
+):
+    """Cheap file-identity check (Slice 4 guard E/K, decision 7).
+
+    Hashes the uploaded file and reports whether that exact file already belongs
+    to a subject. NO AI call, NO DB writes. Runs BEFORE any AI spend so a known
+    file can jump straight to its subject's chat (guard K) instead of burning a
+    title-suggestion call on a duplicate.
+    """
+    file_bytes = await file.read()
+    file_size = len(file_bytes)
+    if file_size == 0:
+        raise HTTPException(status_code=400, detail="The uploaded file is empty.")
+    if file_size > MAX_UPLOAD_SIZE:
+        raise HTTPException(status_code=413, detail="File is too large. Maximum upload size is 50 MB.")
+
+    content_hash = hashlib.sha256(file_bytes).hexdigest()
+    existing = await find_material_by_hash(db, content_hash)
+    if existing is None:
+        return FileReuseCheckResponse(content_hash=content_hash, known=False)
+
+    # Defensive: the owning subject must still exist (mirrors search_source's
+    # orphan guard). An orphaned material (subject deleted) counts as unknown.
+    owner = await db.get(Subject, existing.subject_id)
+    if owner is None:
+        return FileReuseCheckResponse(content_hash=content_hash, known=False)
+
+    return FileReuseCheckResponse(
+        content_hash=content_hash,
+        known=True,
+        existing_subject_id=owner.id,
+        existing_subject_name=owner.name,
+        already_processed=existing.processing_status == "done",
     )
 
 

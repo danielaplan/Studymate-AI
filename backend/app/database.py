@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import datetime
 from pathlib import Path
+from typing import Optional
 
 from sqlalchemy import (
     Boolean,
@@ -17,6 +18,8 @@ from sqlalchemy import (
     String,
     Text,
     create_engine,
+    select,
+    text,
 )
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase, relationship
@@ -60,6 +63,7 @@ class Material(Base):
     file_type = Column(String(64), nullable=False)  # pdf | image | scan
     file_size_bytes = Column(Integer, nullable=True)
     extracted_text = Column(Text, nullable=True)
+    content_hash = Column(String(64), nullable=True)  # sha256 hex of file bytes; dedup/reuse key
     processing_status = Column(String(32), default="pending")  # pending | processing | done | failed
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
 
@@ -167,12 +171,26 @@ AsyncSessionLocal = async_sessionmaker(engine, expire_on_commit=False, class_=As
 
 
 async def init_db() -> None:
-    """Create all tables on startup."""
+    """Create all tables on startup; add columns create_all cannot alter in."""
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        # Migration: create_all won't add columns to existing tables. Add
+        # content_hash to materials if it isn't present yet (one-time, safe).
+        cols = {
+            row[1]
+            for row in (await conn.execute(text("PRAGMA table_info(materials)"))).fetchall()
+        }
+        if "content_hash" not in cols:
+            await conn.execute(text("ALTER TABLE materials ADD COLUMN content_hash VARCHAR(64)"))
 
 
 async def get_db() -> AsyncSession:  # type: ignore[return]
     """Dependency-injectable async DB session."""
     async with AsyncSessionLocal() as session:
         yield session
+
+
+async def find_material_by_hash(db: AsyncSession, content_hash: str) -> Optional[Material]:
+    """Find an existing material by its file-content hash (dedup / source reuse)."""
+    result = await db.execute(select(Material).where(Material.content_hash == content_hash))
+    return result.scalars().first()
