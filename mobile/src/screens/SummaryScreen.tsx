@@ -4,6 +4,7 @@ import { colors, typography } from '../theme';
 import { Header } from '../components/Header';
 import { DocumentIcon, SparklesIcon } from '../components/Icons';
 import { generateSummary, SummaryAPI } from '../api/client';
+import { addMemoryEntry } from '../storage/subjectMemory';
 
 interface SummaryScreenProps {
   onOpenMenu: () => void;
@@ -39,6 +40,14 @@ export function SummaryScreen({
     try {
       const data = await generateSummary(subjectId, undefined, chapterTitle);
       setSummaryData(data);
+      if (subjectId) {
+        addMemoryEntry({
+          type: 'summary',
+          subjectId,
+          title: data.title || chapterTitle || subjectName || 'Summary',
+          timestamp: new Date().toISOString(),
+        }).catch(() => {});
+      }
     } catch {
       // Fallback
       setSummaryData({

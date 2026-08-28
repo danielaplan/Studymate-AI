@@ -1,17 +1,18 @@
-import React, { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { View, Text, StyleSheet, TextInput, Pressable, ScrollView, ActivityIndicator, Alert, Modal, Animated } from 'react-native';
 import { colors, typography } from '../theme';
 import { Header } from '../components/Header';
 import { SearchIcon, CloseIcon } from '../components/Icons';
 import { SubjectCard } from '../components/SubjectCard';
 import { SubjectItem } from '../types';
-import { listSubjects, createSubject, SubjectAPI } from '../api/client';
+import { listSubjects, createSubject, deleteSubject, updateSubject, SubjectAPI } from '../api/client';
+import { clearSubjectMemory } from '../storage/subjectMemory';
+import { clearQuizHistoryForSubject } from '../storage/quizHistory';
 
 interface SubjectsScreenProps {
   onOpenMenu: () => void;
   onOpenProfile: () => void;
   onSelectSubject: (subject: SubjectItem) => void;
-  onAddNewSubject?: () => void;
 }
 
 function apiToSubjectItem(api: SubjectAPI): SubjectItem {
@@ -19,23 +20,16 @@ function apiToSubjectItem(api: SubjectAPI): SubjectItem {
     id: String(api.id),
     name: api.name,
     materialsCount: api.materials_count,
-    mastery: Math.round(api.mastery),
+    mastery: api.mastery == null ? null : Math.round(api.mastery),
     description: api.description,
+    pinned: api.pinned,
   };
 }
 
-// Fallback demo subjects when backend is offline
-const DEMO_SUBJECTS: SubjectItem[] = [
-  { id: '1', name: 'Computer Science', materialsCount: 12, mastery: 75, description: 'Algorithms, Data Structures, and Systems Architecture.', lastStudied: 'Last studied 2 hrs ago', pinned: true },
-  { id: '2', name: 'Advanced Calculus', materialsCount: 8, mastery: 50, description: 'Multivariable calculus and vector fields.' },
-  { id: '3', name: 'Info Assurance', materialsCount: 9, mastery: 40, description: 'Cryptography, network security, and encryption standards.' },
-  { id: '4', name: 'Cellular Biology', materialsCount: 15, mastery: 88, description: 'Cellular respiration, metabolic pathways, and DNA synthesis.' },
-];
-
-export function SubjectsScreen({ onOpenMenu, onOpenProfile, onSelectSubject, onAddNewSubject }: SubjectsScreenProps) {
-  const [subjects, setSubjects] = useState<SubjectItem[]>(DEMO_SUBJECTS);
+export function SubjectsScreen({ onOpenMenu, onOpenProfile, onSelectSubject }: SubjectsScreenProps) {
+  const [subjects, setSubjects] = useState<SubjectItem[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
-  const [isLoading, setIsLoading] = useState(false);
+  const [isLoading, setIsLoading] = useState(true);
   const [isAdding, setIsAdding] = useState(false);
   const [newSubjectName, setNewSubjectName] = useState('');
   const [selectedSubjectMenu, setSelectedSubjectMenu] = useState<SubjectItem | null>(null);
@@ -67,11 +61,10 @@ export function SubjectsScreen({ onOpenMenu, onOpenProfile, onSelectSubject, onA
     setIsLoading(true);
     try {
       const apiSubjects = await listSubjects();
-      if (apiSubjects.length > 0) {
-        setSubjects(apiSubjects.map(apiToSubjectItem));
-      }
+      setSubjects(apiSubjects.map(apiToSubjectItem));
     } catch {
-      // Keep demo subjects on offline
+      // Backend offline - keep empty list
+      setSubjects([]);
     } finally {
       setIsLoading(false);
     }
@@ -98,17 +91,31 @@ export function SubjectsScreen({ onOpenMenu, onOpenProfile, onSelectSubject, onA
     s.name.toLowerCase().includes(searchQuery.toLowerCase())
   );
 
-  const handleTogglePin = (subject: SubjectItem) => {
+  const handleTogglePin = async (subject: SubjectItem) => {
+    const newPinned = !subject.pinned;
+    // Optimistic update
     setSubjects((prev) =>
       prev
-        .map((item) => (item.id === subject.id ? { ...item, pinned: !item.pinned } : item))
+        .map((item) => (item.id === subject.id ? { ...item, pinned: newPinned } : item))
         .sort((a, b) => Number(b.pinned) - Number(a.pinned))
     );
     setSelectedSubjectMenu(null);
     setShowDeleteConfirm(false);
+
+    try {
+      await updateSubject(parseInt(subject.id), { pinned: newPinned });
+    } catch (err: any) {
+      // Rollback on error
+      setSubjects((prev) =>
+        prev
+          .map((item) => (item.id === subject.id ? { ...item, pinned: !newPinned } : item))
+          .sort((a, b) => Number(b.pinned) - Number(a.pinned))
+      );
+      Alert.alert('Could not update pin status', err.message || 'Unknown error');
+    }
   };
 
-  const handleRenameSubject = () => {
+  const handleRenameSubject = async () => {
     if (!selectedSubjectMenu) return;
     const trimmed = renameValue.trim();
     if (!trimmed) {
@@ -116,17 +123,39 @@ export function SubjectsScreen({ onOpenMenu, onOpenProfile, onSelectSubject, onA
       return;
     }
 
+    const previousName = selectedSubjectMenu.name;
+    // Optimistic update
     setSubjects((prev) => prev.map((item) => (item.id === selectedSubjectMenu.id ? { ...item, name: trimmed } : item)));
     setSelectedSubjectMenu(null);
     setRenameValue('');
     setShowDeleteConfirm(false);
+
+    try {
+      await updateSubject(parseInt(selectedSubjectMenu.id), { name: trimmed });
+    } catch (err: any) {
+      // Rollback on error
+      setSubjects((prev) => prev.map((item) => (item.id === selectedSubjectMenu.id ? { ...item, name: previousName } : item)));
+      Alert.alert('Could not rename subject', err.message || 'Unknown error');
+    }
   };
 
-  const handleDeleteSubject = (subject: SubjectItem) => {
+  const handleDeleteSubject = async (subject: SubjectItem) => {
+    // Optimistic update
     setSubjects((prev) => prev.filter((item) => item.id !== subject.id));
     setSelectedSubjectMenu(null);
     setRenameValue('');
     setShowDeleteConfirm(false);
+
+    try {
+      await deleteSubject(parseInt(subject.id));
+      // Remove this subject's on-device data alongside it.
+      clearSubjectMemory(parseInt(subject.id)).catch(() => {});
+      clearQuizHistoryForSubject(parseInt(subject.id)).catch(() => {});
+    } catch (err: any) {
+      // Rollback on error - reload from server
+      Alert.alert('Could not delete subject', err.message || 'Unknown error');
+      loadSubjects();
+    }
   };
 
   const closeMenu = () => {

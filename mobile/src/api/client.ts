@@ -4,6 +4,7 @@
  */
 
 import { Platform } from 'react-native';
+import type { MasteryDetail } from '../types';
 
 const getBaseUrl = (): string => {
   const envUrl = process.env.EXPO_PUBLIC_API_URL;
@@ -47,8 +48,9 @@ export interface SubjectAPI {
   name: string;
   description?: string;
   color_tag?: string;
+  pinned: boolean;
   materials_count: number;
-  mastery: number;
+  mastery: number | null;
 }
 
 export const listSubjects = () => apiRequest<SubjectAPI[]>('/api/subjects');
@@ -61,6 +63,19 @@ export const createSubject = (name: string, description?: string) =>
 
 export const deleteSubject = (id: number) =>
   fetch(`${API_URL}/api/subjects/${id}`, { method: 'DELETE' });
+
+export interface SubjectUpdate {
+  name?: string;
+  description?: string;
+  color_tag?: string;
+  pinned?: boolean;
+}
+
+export const updateSubject = (id: number, data: SubjectUpdate) =>
+  apiRequest<SubjectAPI>(`/api/subjects/${id}`, {
+    method: 'PATCH',
+    body: JSON.stringify(data),
+  });
 
 // ---------------------------------------------------------------------------
 // Materials
@@ -117,6 +132,41 @@ export const uploadMaterial = async (
 export const deleteMaterial = (materialId: number) =>
   fetch(`${API_URL}/api/materials/${materialId}`, { method: 'DELETE' });
 
+export interface ExtractTextResponse {
+  extracted_text: string;
+  suggested_title: string;
+  file_type: string;
+}
+
+export const extractTextAndSuggestTitle = async (fileUri: string, fileName: string, mimeType: string = 'application/pdf', fileBlob?: Blob): Promise<ExtractTextResponse> => {
+  const formData = new FormData();
+  if (Platform.OS === 'web') {
+    if (fileBlob) {
+      formData.append('file', fileBlob, fileName);
+    } else {
+      const fetchRes = await fetch(fileUri);
+      const blob = await fetchRes.blob();
+      formData.append('file', blob, fileName);
+    }
+  } else {
+    formData.append('file', {
+      uri: fileUri,
+      name: fileName,
+      type: mimeType || 'application/pdf',
+    } as any);
+  }
+
+  const res = await fetch(`${API_URL}/api/extract-text-and-suggest-title`, {
+    method: 'POST',
+    body: formData,
+  });
+  if (!res.ok) {
+    const err = await res.text();
+    throw new Error(`Extract text failed (${res.status}): ${err}`);
+  }
+  return res.json();
+};
+
 // ---------------------------------------------------------------------------
 // RAG Chat
 // ---------------------------------------------------------------------------
@@ -166,17 +216,72 @@ export interface QuizQuestionAPI {
   explanation?: string;
 }
 
-export const generateQuiz = (subjectId: number, topicTag?: string, numQuestions = 10) =>
+export interface QuizGenerateOptions {
+  topicTag?: string;
+  numQuestions?: number;
+  materialId?: number | 'all';
+  difficulty?: 'easy' | 'medium' | 'hard';
+  timeLimit?: number | null;
+}
+
+export const generateQuiz = (subjectId: number, opts: QuizGenerateOptions = {}) =>
   apiRequest<{ subject: string; questions: QuizQuestionAPI[]; count: number }>(
     `/api/subjects/${subjectId}/quiz`,
     {
       method: 'POST',
-      body: JSON.stringify({ topic_tag: topicTag ?? null, num_questions: numQuestions, save_to_db: true }),
+      body: JSON.stringify({
+        topic_tag: opts.topicTag ?? null,
+        num_questions: opts.numQuestions ?? 10,
+        difficulty: opts.difficulty ?? null,
+        material_id: opts.materialId === 'all' || opts.materialId == null ? null : opts.materialId,
+        time_limit: opts.timeLimit ?? null,
+        save_to_db: true,
+      }),
     }
   );
 
 export const getQuizQuestions = (subjectId: number) =>
   apiRequest<QuizQuestionAPI[]>(`/api/subjects/${subjectId}/quiz`);
+
+// ---------------------------------------------------------------------------
+// Quiz attempts & mastery (drives the real mastery scoring system)
+// ---------------------------------------------------------------------------
+
+export interface QuizAttemptRecord {
+  topic: string;
+  correct: boolean;
+}
+
+interface MasteryRaw {
+  overall: number | null;
+  assessed: boolean;
+  by_topic: Record<string, number>; // topic -> percentage (0-100)
+}
+
+const toMasteryDetail = (raw: MasteryRaw): MasteryDetail => ({
+  overall: raw.overall,
+  assessed: raw.assessed,
+  byTopic: Object.entries(raw.by_topic ?? {}).map(([topic, mastery]) => ({
+    topic,
+    mastery,
+  })),
+});
+
+export const recordQuizAttempt = async (
+  subjectId: number,
+  attempts: QuizAttemptRecord[]
+): Promise<MasteryDetail> => {
+  const raw = await apiRequest<MasteryRaw>(`/api/subjects/${subjectId}/quiz-attempts`, {
+    method: 'POST',
+    body: JSON.stringify({ attempts }),
+  });
+  return toMasteryDetail(raw);
+};
+
+export const getSubjectMastery = async (subjectId: number): Promise<MasteryDetail> => {
+  const raw = await apiRequest<MasteryRaw>(`/api/subjects/${subjectId}/mastery`);
+  return toMasteryDetail(raw);
+};
 
 // ---------------------------------------------------------------------------
 // Flashcards
@@ -191,12 +296,25 @@ export interface FlashcardAPI {
   times_reviewed?: number;
 }
 
-export const generateFlashcards = (subjectId: number, deckTitle?: string, numCards = 15) =>
+export interface FlashcardGenerateOptions {
+  deckTitle?: string;
+  numCards?: number;
+  materialId?: number | 'all';
+  focus?: 'definitions' | 'concepts' | 'qa';
+}
+
+export const generateFlashcards = (subjectId: number, opts: FlashcardGenerateOptions = {}) =>
   apiRequest<{ subject: string; deck_title: string; flashcards: FlashcardAPI[]; count: number }>(
     `/api/subjects/${subjectId}/flashcards`,
     {
       method: 'POST',
-      body: JSON.stringify({ deck_title: deckTitle ?? null, num_cards: numCards, save_to_db: true }),
+      body: JSON.stringify({
+        deck_title: opts.deckTitle ?? null,
+        num_cards: opts.numCards ?? 15,
+        material_id: opts.materialId === 'all' || opts.materialId == null ? null : opts.materialId,
+        focus: opts.focus ?? null,
+        save_to_db: true,
+      }),
     }
   );
 

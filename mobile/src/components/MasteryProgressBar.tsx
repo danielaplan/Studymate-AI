@@ -3,7 +3,7 @@ import { View, Text, StyleSheet } from 'react-native';
 import { colors, typography } from '../theme';
 
 interface MasteryProgressBarProps {
-  percentage: number;
+  percentage: number | null;
   showText?: boolean;
   width?: number | string;
 }
@@ -13,6 +13,17 @@ export function MasteryProgressBar({
   showText = true,
   width = 96,
 }: MasteryProgressBarProps) {
+  if (percentage == null) {
+    return (
+      <View style={styles.container}>
+        {showText && <Text style={styles.notAssessedText}>Not yet assessed</Text>}
+        <View style={[styles.track, typeof width === 'number' ? { width } : { width: '100%' }]}>
+          <View style={[styles.fill, { width: '0%' }]} />
+        </View>
+      </View>
+    );
+  }
+
   const clamped = Math.max(0, Math.min(100, percentage));
 
   return (
@@ -37,6 +48,12 @@ const styles = StyleSheet.create({
     fontFamily: typography.sansRegular,
     fontSize: 13,
     color: colors.textSecondary,
+  },
+  notAssessedText: {
+    fontFamily: typography.sansRegular,
+    fontSize: 13,
+    fontStyle: 'italic',
+    color: colors.textMuted,
   },
   track: {
     height: 4,

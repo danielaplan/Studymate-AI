@@ -64,3 +64,8 @@ Thumbs.db
 .idea/
 .vscode/
 CLAUDE.md
+
+# Local working notes — never commit / push to GitHub
+CHANGES.md
+LOCAL_NOTES.md
+.devnotes/

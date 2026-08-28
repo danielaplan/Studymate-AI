@@ -200,6 +200,7 @@ def store_chunks_in_vector_db(
 def retrieve_relevant_chunks(
     query: str,
     subject_id: Optional[int] = None,
+    material_id: Optional[int] = None,
     n_results: int = 5,
     fallback_chunks: Optional[List[str]] = None,
 ) -> List[str]:
@@ -210,7 +211,14 @@ def retrieve_relevant_chunks(
     collection = _get_chroma_collection()
     if collection is not None:
         try:
-            where = {"subject_id": subject_id} if subject_id else None
+            # Scope the vector search by subject and (optionally) a single material.
+            where = None
+            if subject_id is not None or material_id is not None:
+                where = {}
+                if subject_id is not None:
+                    where["subject_id"] = subject_id
+                if material_id is not None:
+                    where["material_id"] = material_id
             results = collection.query(
                 query_texts=[query],
                 n_results=n_results,

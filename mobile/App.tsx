@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Animated, StyleSheet, View, ActivityIndicator, Text } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
@@ -18,9 +18,10 @@ import {
 } from '@expo-google-fonts/inter';
 
 import { colors } from './src/theme';
-import { ScreenName, TabName, SubjectItem } from './src/types';
+import { ScreenName, TabName, SubjectItem, QuizAttempt } from './src/types';
 import { BottomNav } from './src/components/BottomNav';
-import { MaterialAPI } from './src/api/client';
+import { MaterialAPI, SummaryAPI } from './src/api/client';
+import QuizOverview from './src/screens/QuizOverview';
 
 // Screenskimi
 import { OnboardingScreen } from './src/screens/OnboardingScreen';
@@ -31,6 +32,8 @@ import { SubjectDetailScreen } from './src/screens/SubjectDetailScreen';
 import { FlashcardsScreen } from './src/screens/FlashcardsScreen';
 import { SummaryScreen } from './src/screens/SummaryScreen';
 import { QuizScreen } from './src/screens/QuizScreen';
+import { QuizSetupScreen, QuizPrefs } from './src/screens/QuizSetupScreen';
+import { CardsPrefs } from './src/components/CardsSetupSheet';
 import { ProfileScreen } from './src/screens/ProfileScreen';
 
 export default function App() {
@@ -52,6 +55,11 @@ export default function App() {
   const [selectedSubject, setSelectedSubject] = useState<SubjectItem | null>(null);
   const [selectedMaterial, setSelectedMaterial] = useState<MaterialAPI | null>(null);
   const [chatPrompt, setChatPrompt] = useState<string | undefined>(undefined);
+  const [expandedSummary, setExpandedSummary] = useState<SummaryAPI | null>(null);
+  const [chatExplainTerms, setChatExplainTerms] = useState<{ term: string; explanation: string }[] | null>(null);
+  const [quizPrefs, setQuizPrefs] = useState<QuizPrefs | null>(null);
+  const [flashcardPrefs, setFlashcardPrefs] = useState<CardsPrefs | null>(null);
+  const [selectedAttempt, setSelectedAttempt] = useState<QuizAttempt | null>(null);
   const fadeAnim = useRef(new Animated.Value(0)).current;
   const translateY = useRef(new Animated.Value(18)).current;
 
@@ -110,16 +118,11 @@ export default function App() {
     } else if (promptText.toLowerCase().includes('summar')) {
       setCurrentScreen('summary');
     } else {
+      setChatExplainTerms(null);
       setChatPrompt(promptText);
       setActiveTab('chat');
       setCurrentScreen('chat');
     }
-  };
-
-  const handleStudyAction = (promptText: string) => {
-    setChatPrompt(promptText);
-    setActiveTab('chat');
-    setCurrentScreen('chat');
   };
 
   const handleOpenSubject = (subject: SubjectItem) => {
@@ -174,6 +177,19 @@ export default function App() {
               }
             }}
             onSelectSubject={handleOpenSubject}
+            onOpenQuizResult={(attempt) => {
+              if (attempt.subjectId !== null) {
+                setSelectedSubject({
+                  id: String(attempt.subjectId),
+                  name: attempt.subjectName,
+                  materialsCount: 0,
+                  mastery: 0,
+                });
+              }
+              setSelectedAttempt(attempt);
+              setActiveTab('home');
+              setCurrentScreen('quiz-result');
+            }}
           />
         );
 
@@ -191,6 +207,9 @@ export default function App() {
             initialPrompt={chatPrompt}
             subjectId={subjectIdNum}
             subjectName={subjectName}
+            initialSummary={expandedSummary ?? undefined}
+            explainTerms={chatExplainTerms}
+            onSummaryConsumed={() => setExpandedSummary(null)}
           />
         );
 
@@ -219,11 +238,27 @@ export default function App() {
               setCurrentScreen('profile');
             }}
             onAskAI={() => {
+              setChatExplainTerms(null);
               setActiveTab('chat');
               setCurrentScreen('chat');
             }}
-            onQuickAction={handleStudyAction}
+            onExplain={(summary) => {
+              setChatExplainTerms(summary?.key_terms ?? null);
+              setActiveTab('chat');
+              setCurrentScreen('chat');
+            }}
+            onStartQuiz={() => setCurrentScreen('quiz-setup')}
+            onStartCards={(prefs) => {
+              setFlashcardPrefs(prefs);
+              setCurrentScreen('flashcards');
+            }}
             onOpenMaterial={handleOpenMaterial}
+            onExpandSummary={(summary) => {
+              setChatExplainTerms(null);
+              setExpandedSummary(summary);
+              setActiveTab('chat');
+              setCurrentScreen('chat');
+            }}
           />
         ) : (
           <SubjectsScreen
@@ -247,8 +282,8 @@ export default function App() {
               setActiveTab('profile');
               setCurrentScreen('profile');
             }}
-            onCreateQuiz={() => setCurrentScreen('quiz')}
-            onCreateFlashcards={() => setCurrentScreen('flashcards')}
+            onCreateQuiz={() => { setQuizPrefs(null); setCurrentScreen('quiz'); }}
+            onCreateFlashcards={() => { setFlashcardPrefs(null); setCurrentScreen('flashcards'); }}
             subjectId={subjectIdNum}
             subjectName={subjectName}
             chapterTitle={selectedMaterial?.filename}
@@ -269,6 +304,9 @@ export default function App() {
             subjectId={subjectIdNum}
             subjectName={subjectName}
             deckTitle={selectedMaterial ? `${selectedMaterial.filename} Deck` : undefined}
+            {...(flashcardPrefs
+              ? { cardCount: flashcardPrefs.cardCount, focus: flashcardPrefs.focus, sourceMaterialId: flashcardPrefs.source }
+              : {})}
           />
         );
 
@@ -277,9 +315,47 @@ export default function App() {
           <QuizScreen
             onClose={() => setCurrentScreen(selectedSubject ? 'subject-detail' : 'home')}
             onPause={() => setCurrentScreen('home')}
+            onRetake={() => setCurrentScreen('quiz-setup')}
             subjectId={subjectIdNum}
             subjectName={subjectName}
             topicTag={selectedMaterial?.filename}
+            {...(quizPrefs
+              ? { questionCount: quizPrefs.questionCount, difficulty: quizPrefs.difficulty, sourceMaterialId: quizPrefs.source, timeLimit: quizPrefs.timeLimit }
+              : {})}
+          />
+        );
+
+      case 'quiz-result':
+        if (selectedAttempt) {
+          return (
+            <QuizOverview
+              questions={selectedAttempt.questions}
+              answers={selectedAttempt.answers}
+              subjectName={selectedAttempt.subjectName}
+              onClose={() => {
+                setSelectedAttempt(null);
+                setActiveTab('home');
+                setCurrentScreen('home');
+              }}
+              onRetake={() => {
+                setSelectedAttempt(null);
+                setCurrentScreen('quiz-setup');
+              }}
+            />
+          );
+        }
+        return null;
+
+      case 'quiz-setup':
+        return (
+          <QuizSetupScreen
+            subjectId={subjectIdNum}
+            subjectName={subjectName}
+            onClose={() => setCurrentScreen('subject-detail')}
+            onStart={(prefs) => {
+              setQuizPrefs(prefs);
+              setCurrentScreen('quiz');
+            }}
           />
         );
 
@@ -318,6 +394,7 @@ export default function App() {
   const showBottomNav =
     hasCompletedOnboarding &&
     currentScreen !== 'quiz' &&
+    currentScreen !== 'quiz-result' &&
     currentScreen !== 'onboarding';
 
   return (

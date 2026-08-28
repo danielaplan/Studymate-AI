@@ -38,6 +38,7 @@ class Subject(Base):
     name = Column(String(255), nullable=False, unique=True)
     description = Column(Text, nullable=True)
     color_tag = Column(String(32), nullable=True, default="#334F2B")
+    pinned = Column(Boolean, default=False, nullable=False)
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
 
@@ -45,6 +46,8 @@ class Subject(Base):
     flashcards = relationship("Flashcard", back_populates="subject", cascade="all, delete-orphan")
     quiz_questions = relationship("QuizQuestion", back_populates="subject", cascade="all, delete-orphan")
     chat_history = relationship("ChatMessage", back_populates="subject", cascade="all, delete-orphan")
+    quiz_attempts = relationship("QuizAttempt", back_populates="subject", cascade="all, delete-orphan")
+    mastery_cache = relationship("MasteryCache", back_populates="subject", uselist=False, cascade="all, delete-orphan")
 
 
 class Material(Base):
@@ -124,6 +127,36 @@ class ChatMessage(Base):
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
 
     subject = relationship("Subject", back_populates="chat_history")
+
+
+class QuizAttempt(Base):
+    __tablename__ = "quiz_attempts"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(Integer, nullable=True)  # single-user app; no users table, FK unused
+    subject_id = Column(Integer, ForeignKey("subjects.id"), nullable=False)
+    topic = Column(String(255), nullable=True)  # topic / chunk / source reference
+    score = Column(Float, nullable=False)  # 0.0 - 1.0 (1.0 = correct)
+    taken_at = Column(DateTime, default=datetime.datetime.utcnow)
+
+    subject = relationship("Subject", back_populates="quiz_attempts")
+
+
+class MasteryCache(Base):
+    """Cached, computed mastery per subject to avoid recomputing on every read.
+
+    `overall` is 0.0-1.0 or NULL when the subject has not been assessed yet.
+    `by_topic` is a JSON object mapping topic -> 0.0-1.0 mastery.
+    """
+
+    __tablename__ = "mastery_cache"
+
+    subject_id = Column(Integer, ForeignKey("subjects.id"), primary_key=True)
+    overall = Column(Float, nullable=True)
+    by_topic = Column(Text, nullable=True)
+    computed_at = Column(DateTime, default=datetime.datetime.utcnow)
+
+    subject = relationship("Subject", back_populates="mastery_cache")
 
 
 # ---------------------------------------------------------------------------

@@ -87,6 +87,15 @@ export function SparklesIcon({ size = 18, color = colors.brandGreen, strokeWidth
   );
 }
 
+export function AnalyticsIcon({ size = 18, color = colors.brandGreen, strokeWidth = 1.8 }: IconProps) {
+  return (
+    <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
+      <Path d="M4 4V20H20" stroke={color} strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round" />
+      <Path d="M7.5 20V13M12 20V8M16.5 20V11" stroke={color} strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round" />
+    </Svg>
+  );
+}
+
 export function SearchIcon({ size = 18, color = colors.textPlaceholder, strokeWidth = 1.8 }: IconProps) {
   return (
     <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">

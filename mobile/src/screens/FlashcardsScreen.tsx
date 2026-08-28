@@ -6,6 +6,7 @@ import { ClockIcon } from '../components/Icons';
 import { FlashcardItem } from '../components/FlashcardItem';
 import { Flashcard } from '../types';
 import { generateFlashcards, getFlashcards, FlashcardAPI, updateFlashcardMastery } from '../api/client';
+import { addMemoryEntry } from '../storage/subjectMemory';
 
 interface FlashcardsScreenProps {
   onOpenMenu: () => void;
@@ -13,6 +14,9 @@ interface FlashcardsScreenProps {
   subjectId?: number;
   subjectName?: string;
   deckTitle?: string;
+  cardCount?: number;
+  focus?: 'definitions' | 'concepts' | 'qa';
+  sourceMaterialId?: number | 'all';
 }
 
 const FALLBACK_CARDS: Flashcard[] = [
@@ -41,6 +45,9 @@ export function FlashcardsScreen({
   subjectId,
   subjectName,
   deckTitle,
+  cardCount,
+  focus,
+  sourceMaterialId,
 }: FlashcardsScreenProps) {
   const [cards, setCards] = useState<Flashcard[]>(FALLBACK_CARDS);
   const [rawApiCards, setRawApiCards] = useState<FlashcardAPI[]>([]);
@@ -52,22 +59,49 @@ export function FlashcardsScreen({
     loadOrGenerateCards();
   }, [subjectId]);
 
+  // A custom config (specific source / count / focus) means we always generate
+  // fresh cards instead of reusing stored ones.
+  const customConfig =
+    (sourceMaterialId !== undefined && sourceMaterialId !== 'all') ||
+    cardCount !== undefined ||
+    focus !== undefined;
+
   const loadOrGenerateCards = async () => {
     if (!subjectId) return;
     setIsLoading(true);
     try {
-      // Try to load existing flashcards first
-      let apiCards = await getFlashcards(subjectId);
-      if (!apiCards.length) {
-        // Generate new flashcards from study materials
-        const result = await generateFlashcards(subjectId, deckTitle, 15);
+      let apiCards: FlashcardAPI[];
+      if (customConfig) {
+        const result = await generateFlashcards(subjectId, {
+          deckTitle,
+          numCards: cardCount ?? 15,
+          materialId: sourceMaterialId,
+          focus,
+        });
         apiCards = result.flashcards;
+      } else {
+        // Try to load existing flashcards first
+        apiCards = await getFlashcards(subjectId);
+        if (!apiCards.length) {
+          // Generate new flashcards from study materials
+          const result = await generateFlashcards(subjectId, { deckTitle, numCards: 15 });
+          apiCards = result.flashcards;
+        }
       }
       setRawApiCards(apiCards);
       const deck = deckTitle || `${subjectName} Deck`;
       const code = (subjectName || 'SUBJECT').toUpperCase();
       setCards(apiCards.map((c, i) => apiToFlashcard(c, i, apiCards.length, deck, code)));
       setCurrentCardIndex(0);
+      if (subjectId) {
+        addMemoryEntry({
+          type: 'cards',
+          subjectId,
+          count: apiCards.length,
+          title: deck,
+          timestamp: new Date().toISOString(),
+        }).catch(() => {});
+      }
     } catch (err) {
       // Fallback to demo cards
       setCards(FALLBACK_CARDS);

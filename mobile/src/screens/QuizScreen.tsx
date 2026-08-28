@@ -4,15 +4,23 @@ import { colors, typography } from '../theme';
 import { Header } from '../components/Header';
 import { ClockIcon } from '../components/Icons';
 import { QuizOptionItem } from '../components/QuizOptionItem';
-import { QuizQuestion } from '../types';
-import { generateQuiz, getQuizQuestions, QuizQuestionAPI } from '../api/client';
+import { QuizQuestion, QuizAnswer, QuizAttempt } from '../types';
+import { generateQuiz, getQuizQuestions, recordQuizAttempt, QuizQuestionAPI } from '../api/client';
+import QuizOverview from './QuizOverview';
+import { saveQuizAttempt } from '../storage/quizHistory';
+import { addMemoryEntry } from '../storage/subjectMemory';
 
 interface QuizScreenProps {
   onClose: () => void;
   onPause?: () => void;
+  onRetake?: () => void;
   subjectId?: number;
   subjectName?: string;
   topicTag?: string;
+  questionCount?: number;
+  difficulty?: 'easy' | 'medium' | 'hard';
+  sourceMaterialId?: number | 'all';
+  timeLimit?: number | null;
 }
 
 const FALLBACK_QUESTIONS: QuizQuestion[] = [
@@ -54,31 +62,73 @@ function apiToQuizQuestion(api: QuizQuestionAPI, idx: number, total: number): Qu
   };
 }
 
-export function QuizScreen({ onClose, onPause, subjectId, subjectName, topicTag }: QuizScreenProps) {
+function formatTime(totalSeconds: number): string {
+  const m = Math.floor(totalSeconds / 60);
+  const s = totalSeconds % 60;
+  return `${m}:${String(s).padStart(2, '0')}`;
+}
+
+export function QuizScreen({
+  onClose,
+  onPause,
+  onRetake,
+  subjectId,
+  subjectName,
+  topicTag,
+  questionCount,
+  difficulty,
+  sourceMaterialId,
+  timeLimit,
+}: QuizScreenProps) {
   const [questions, setQuestions] = useState<QuizQuestion[]>(FALLBACK_QUESTIONS);
   const [currentIdx, setCurrentIdx] = useState(0);
   const [selectedOption, setSelectedOption] = useState<number | null>(null);
-  const [score, setScore] = useState(0);
+  const [answers, setAnswers] = useState<QuizAnswer[]>([]);
   const [isCompleted, setIsCompleted] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
+  const [secondsLeft, setSecondsLeft] = useState<number | null>(null);
+
+  // Keep the latest questions available to the timer closure so it can mark
+  // unanswered questions correctly when time runs out.
+  const questionsRef = React.useRef(questions);
+  questionsRef.current = questions;
+
+  // A custom config (specific source / count / difficulty) means we always
+  // generate fresh questions instead of reusing stored ones.
+  const customConfig =
+    sourceMaterialId !== undefined && sourceMaterialId !== 'all' ||
+    questionCount !== undefined ||
+    difficulty !== undefined;
 
   useEffect(() => {
     if (!subjectId) return;
     loadOrGenerateQuiz();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [subjectId]);
 
   const loadOrGenerateQuiz = async () => {
     if (!subjectId) return;
     setIsLoading(true);
     try {
-      let apiQs = await getQuizQuestions(subjectId);
-      if (!apiQs.length) {
-        const result = await generateQuiz(subjectId, topicTag, 10);
+      let apiQs: QuizQuestionAPI[];
+      if (customConfig) {
+        const result = await generateQuiz(subjectId, {
+          topicTag,
+          numQuestions: questionCount ?? 10,
+          materialId: sourceMaterialId,
+          difficulty,
+        });
         apiQs = result.questions;
+      } else {
+        apiQs = await getQuizQuestions(subjectId);
+        if (!apiQs.length) {
+          const result = await generateQuiz(subjectId, { topicTag, numQuestions: 10 });
+          apiQs = result.questions;
+        }
       }
       setQuestions(apiQs.map((q, i) => apiToQuizQuestion(q, i, apiQs.length)));
       setCurrentIdx(0);
-      setScore(0);
+      setAnswers([]);
       setIsCompleted(false);
     } catch {
       setQuestions(FALLBACK_QUESTIONS);
@@ -86,6 +136,78 @@ export function QuizScreen({ onClose, onPause, subjectId, subjectName, topicTag 
       setIsLoading(false);
     }
   };
+
+  // Live countdown when a time limit is set. On expiry the quiz ends and the
+  // full results overview is shown (unanswered questions counted as incorrect).
+  useEffect(() => {
+    if (!timeLimit) {
+      setSecondsLeft(null);
+      return;
+    }
+    setSecondsLeft(timeLimit * 60);
+    const id = setInterval(() => {
+      setSecondsLeft((s) => {
+        if (s === null) return null;
+        if (s <= 1) {
+          clearInterval(id);
+          // Mark any unanswered questions as incorrect so the overview is complete.
+          setAnswers((prev) => {
+            const next = [...prev];
+            for (let i = prev.length; i < questionsRef.current.length; i++) {
+              next.push({ selected: null, correct: questionsRef.current[i].correctIndex, isCorrect: false });
+            }
+            return next;
+          });
+          setIsCompleted(true);
+          return 0;
+        }
+        return s - 1;
+      });
+    }, 1000);
+    return () => clearInterval(id);
+  }, [timeLimit]);
+
+  // Persist a history entry as soon as the quiz is completed. The `answers`
+  // array is already final at this point (filled on submit and on time-out).
+  useEffect(() => {
+    if (!isCompleted || questions.length === 0) return;
+    const correctCount = answers.filter((a) => a.isCorrect).length;
+    const attempt: QuizAttempt = {
+      id: `qa_${Date.now()}`,
+      subjectId: subjectId ?? null,
+      subjectName: subjectName ?? 'Quiz',
+      score: correctCount,
+      total: questions.length,
+      pct: Math.round((correctCount / questions.length) * 100),
+      difficulty: difficulty ?? null,
+      count: questions.length,
+      createdAt: new Date().toISOString(),
+      questions,
+      answers,
+    };
+    saveQuizAttempt(attempt).catch(() => {
+      // Storage unavailable — ignore so the results screen still renders.
+    });
+    if (subjectId != null) {
+      addMemoryEntry({
+        type: 'quiz',
+        subjectId,
+        timestamp: new Date().toISOString(),
+        attemptId: attempt.id,
+        score: attempt.score,
+        total: attempt.total,
+        pct: attempt.pct,
+      }).catch(() => {});
+
+      // Record real quiz performance so mastery can be computed per topic.
+      const attempts = questions.map((q, i) => ({
+        topic: q.topic,
+        correct: answers[i]?.isCorrect ?? false,
+      }));
+      recordQuizAttempt(subjectId, attempts).catch(() => {});
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isCompleted]);
 
   const question = questions[currentIdx] || questions[0];
   const progressPercent = ((currentIdx + 1) / question.totalQuestions) * 100;
@@ -95,7 +217,11 @@ export function QuizScreen({ onClose, onPause, subjectId, subjectName, topicTag 
       Alert.alert('Select an answer', 'Please choose an option before continuing.');
       return;
     }
-    if (selectedOption === question.correctIndex) setScore((s) => s + 1);
+    const isCorrect = selectedOption === question.correctIndex;
+    setAnswers((prev) => [
+      ...prev,
+      { selected: selectedOption, correct: question.correctIndex, isCorrect },
+    ]);
 
     if (currentIdx < questions.length - 1) {
       setCurrentIdx((p) => p + 1);
@@ -117,6 +243,18 @@ export function QuizScreen({ onClose, onPause, subjectId, subjectName, topicTag 
     );
   }
 
+  if (isCompleted) {
+    return (
+      <QuizOverview
+        questions={questions}
+        answers={answers}
+        subjectName={subjectName}
+        onClose={onClose}
+        onRetake={onRetake ?? (() => {})}
+      />
+    );
+  }
+
   return (
     <View style={styles.container}>
       <Header showClose onClose={onClose} rightActionText="Pause" onRightAction={onPause} />
@@ -125,8 +263,10 @@ export function QuizScreen({ onClose, onPause, subjectId, subjectName, topicTag 
         <View style={styles.counterRow}>
           <Text style={styles.counterText}>QUESTION {question.questionNumber} OF {question.totalQuestions}</Text>
           <View style={styles.timerGroup}>
-            <ClockIcon size={14} color={colors.textMuted} />
-            <Text style={styles.timerText}>14:59</Text>
+            <ClockIcon size={14} color={timeLimit ? colors.brandGreen : colors.textMuted} />
+            <Text style={[styles.timerText, timeLimit ? styles.timerTextActive : undefined]}>
+              {secondsLeft !== null ? formatTime(secondsLeft) : 'No limit'}
+            </Text>
           </View>
         </View>
 
@@ -143,7 +283,9 @@ export function QuizScreen({ onClose, onPause, subjectId, subjectName, topicTag 
               key={idx}
               text={opt}
               selected={selectedOption === idx}
-              onSelect={() => setSelectedOption(idx)}
+              onSelect={() => {
+                if (!isCompleted) setSelectedOption(idx);
+              }}
             />
           ))}
         </View>
@@ -157,19 +299,6 @@ export function QuizScreen({ onClose, onPause, subjectId, subjectName, topicTag 
             {currentIdx === questions.length - 1 ? 'Finish Quiz' : 'Next Question →'}
           </Text>
         </Pressable>
-
-        {isCompleted && (
-          <View style={styles.resultCard}>
-            <Text style={styles.resultTitle}>Quiz Completed! 🎉</Text>
-            <Text style={styles.resultSubtitle}>
-              You scored {score} out of {questions.length} questions correctly.
-              {score >= questions.length * 0.8 ? ' Excellent work!' : ' Keep reviewing and try again!'}
-            </Text>
-            <Pressable onPress={onClose} style={styles.doneBtn}>
-              <Text style={styles.doneBtnText}>Return to Study</Text>
-            </Pressable>
-          </View>
-        )}
       </ScrollView>
     </View>
   );
@@ -184,6 +313,7 @@ const styles = StyleSheet.create({
   counterText: { fontFamily: typography.sansSemiBold, fontSize: 11, color: colors.textMuted, letterSpacing: 1.5 },
   timerGroup: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   timerText: { fontFamily: typography.sansMedium, fontSize: 13, color: colors.textMuted },
+  timerTextActive: { fontFamily: typography.sansSemiBold, fontSize: 13, color: colors.brandGreen },
   progressTrack: { height: 3, backgroundColor: '#E6E9E2', borderRadius: 1.5, overflow: 'hidden', marginBottom: 28 },
   progressFill: { height: 3, backgroundColor: colors.brandGreen },
   topicTag: { fontFamily: typography.sansSemiBold, fontSize: 11, color: colors.textMuted, letterSpacing: 1.5, marginBottom: 12 },
@@ -192,9 +322,4 @@ const styles = StyleSheet.create({
   submitButton: { height: 52, borderRadius: 26, backgroundColor: '#1E221D', alignItems: 'center', justifyContent: 'center', marginBottom: 20 },
   submitButtonPressed: { opacity: 0.85 },
   submitButtonText: { fontFamily: typography.sansSemiBold, fontSize: 15, color: '#FFFFFF' },
-  resultCard: { marginTop: 20, padding: 24, backgroundColor: '#FFFFFF', borderRadius: 16, borderWidth: 1, borderColor: colors.borderLight, alignItems: 'center', gap: 12 },
-  resultTitle: { fontFamily: typography.serifBold, fontSize: 22, color: colors.brandGreenDark },
-  resultSubtitle: { fontFamily: typography.sansRegular, fontSize: 14, color: colors.textSecondary, textAlign: 'center', lineHeight: 22 },
-  doneBtn: { marginTop: 8, paddingVertical: 10, paddingHorizontal: 24, backgroundColor: colors.brandGreen, borderRadius: 20 },
-  doneBtnText: { fontFamily: typography.sansMedium, fontSize: 14, color: '#FFFFFF' },
 });

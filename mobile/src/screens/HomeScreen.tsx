@@ -1,13 +1,15 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { View, Text, StyleSheet, TextInput, Pressable, ScrollView, ActivityIndicator, Alert, Modal } from 'react-native';
 import * as DocumentPicker from 'expo-document-picker';
 import { colors, typography } from '../theme';
 import { Header } from '../components/Header';
-import { PaperclipIcon, DocumentIcon, CloseIcon } from '../components/Icons';
+import { PaperclipIcon, DocumentIcon, CloseIcon, ChevronRightIcon } from '../components/Icons';
 import { QuickActionPill } from '../components/QuickActionPill';
 import { MasteryProgressBar } from '../components/MasteryProgressBar';
-import { SubjectItem } from '../types';
-import { listSubjects, createSubject, uploadMaterial, SubjectAPI } from '../api/client';
+import { SubjectItem, QuizAttempt } from '../types';
+import { loadQuizHistory } from '../storage/quizHistory';
+import { addMemoryEntry } from '../storage/subjectMemory';
+import { listSubjects, createSubject, uploadMaterial, extractTextAndSuggestTitle, SubjectAPI } from '../api/client';
 
 interface HomeScreenProps {
   onOpenMenu: () => void;
@@ -15,6 +17,23 @@ interface HomeScreenProps {
   onSelectPrompt: (prompt: string) => void;
   onOpenContinueSubject: () => void;
   onSelectSubject: (subject: SubjectItem) => void;
+  onOpenQuizResult: (attempt: QuizAttempt) => void;
+}
+
+function quizBand(pct: number): string {
+  if (pct >= 80) return colors.brandGreen;
+  if (pct >= 50) return '#E2A23B';
+  return '#D9694E';
+}
+
+function masteryLabel(mastery: number | null): string {
+  return mastery == null ? 'Not yet assessed' : `${mastery}% Mastery`;
+}
+
+function formatAttemptDate(iso: string): string {
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return '';
+  return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
 }
 
 function apiToSubjectItem(api: SubjectAPI): SubjectItem {
@@ -22,9 +41,36 @@ function apiToSubjectItem(api: SubjectAPI): SubjectItem {
     id: String(api.id),
     name: api.name,
     materialsCount: api.materials_count,
-    mastery: Math.round(api.mastery),
+    mastery: api.mastery == null ? null : Math.round(api.mastery),
     description: api.description,
+    pinned: api.pinned,
   };
+}
+
+// Picks a single study recommendation from the loaded subjects, using only the
+// data HomeScreen already has (overall mastery per subject — no extra fetches).
+// Priority: (1) an unassessed subject -> nudge to take a first quiz,
+// (2) the weakest assessed subject below a threshold -> focus there,
+// (3) everything assessed and healthy -> encouragement,
+// (4) no subjects at all -> neutral prompt. Returns a headline string.
+function buildRecommendation(items: SubjectItem[]): string {
+  if (items.length === 0) {
+    return 'Add a subject and take a quiz to see your study pulse.';
+  }
+  const unassessed = items.find((s) => s.mastery == null);
+  if (unassessed) {
+    return `Take your first quiz in ${unassessed.name} to measure mastery.`;
+  }
+  const assessed = items.filter((s) => s.mastery != null) as Array<SubjectItem & { mastery: number }>;
+  const weakest = assessed.reduce(
+    (min, s) => ((s.mastery as number) < (min.mastery as number) ? s : min),
+    assessed[0]
+  );
+  if (weakest.mastery < 60) {
+    return `Focus on ${weakest.name} — your weakest subject (${weakest.mastery}%).`;
+  }
+  const avg = Math.round(assessed.reduce((sum, s) => sum + (s.mastery as number), 0) / assessed.length);
+  return `Strong progress — ${avg}% average mastery across ${assessed.length} subjects.`;
 }
 
 export function HomeScreen({
@@ -33,9 +79,12 @@ export function HomeScreen({
   onSelectPrompt,
   onOpenContinueSubject,
   onSelectSubject,
+  onOpenQuizResult,
 }: HomeScreenProps) {
   const [inputPrompt, setInputPrompt] = useState('');
   const [subjects, setSubjects] = useState<SubjectItem[]>([]);
+  const [history, setHistory] = useState<QuizAttempt[]>([]);
+  const [subjectsLoadFailed, setSubjectsLoadFailed] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
   const [uploadStatus, setUploadStatus] = useState<string>('');
@@ -43,6 +92,8 @@ export function HomeScreen({
   // Modal to choose subject if multiple exist when uploading from Home
   const [pendingFile, setPendingFile] = useState<DocumentPicker.DocumentPickerAsset | null>(null);
   const [showSubjectPickerModal, setShowSubjectPickerModal] = useState(false);
+  // Shown after a file is picked (when subjects exist) to decide: new subject vs existing.
+  const [showUploadTargetModal, setShowUploadTargetModal] = useState(false);
 
   useEffect(() => {
     loadSubjects();
@@ -53,10 +104,99 @@ export function HomeScreen({
     try {
       const data = await listSubjects();
       setSubjects(data.map(apiToSubjectItem));
+      setSubjectsLoadFailed(false);
+      loadQuizHistory().then(setHistory).catch(() => {});
     } catch {
       setSubjects([]);
+      setSubjectsLoadFailed(true);
     } finally {
       setIsLoading(false);
+    }
+  };
+
+  // Creates a fresh subject from a file (analyzes it, auto-names from the
+  // AI-suggested title) and uploads the file into it. Used both when there are
+  // no subjects yet and when the user explicitly chooses "new subject".
+  const createNewSubjectFromFile = async (file: DocumentPicker.DocumentPickerAsset) => {
+    setIsUploading(true);
+    setUploadStatus('Analyzing document...');
+    try {
+      const extractResult = await extractTextAndSuggestTitle(
+        file.uri,
+        file.name,
+        file.mimeType || 'application/pdf',
+        (file as any).file
+      );
+      const suggestedTitle = extractResult.suggested_title || 'Study Notes';
+
+      setUploadStatus(`Creating "${suggestedTitle}"...`);
+      const newSub = await createSubject(suggestedTitle);
+
+      setUploadStatus('Indexing content...');
+      const uploaded = await uploadMaterial(
+        newSub.id,
+        file.uri,
+        file.name,
+        file.mimeType || 'application/pdf',
+        (file as any).file
+      );
+      await addMemoryEntry({
+        type: 'upload',
+        subjectId: newSub.id,
+        timestamp: new Date().toISOString(),
+        fileName: file.name,
+      });
+      await loadSubjects();
+      setIsUploading(false);
+      setUploadStatus('');
+      Alert.alert(
+        'Upload Successful! 📄',
+        `"${file.name}" was parsed (${uploaded.chunks_count} chunks) and added to "${suggestedTitle}".`,
+        [
+          {
+            text: 'View Notes',
+            onPress: () => onSelectSubject(apiToSubjectItem(newSub)),
+          },
+          { text: 'OK' },
+        ]
+      );
+    } catch {
+      setIsUploading(false);
+      setUploadStatus('');
+      // Fallback to generic title if extraction fails
+      setUploadStatus('Creating workspace...');
+      try {
+        const newSub = await createSubject('Study Notes');
+        const uploaded = await uploadMaterial(
+          newSub.id,
+          file.uri,
+          file.name,
+          file.mimeType || 'application/pdf',
+          (file as any).file
+        );
+        await addMemoryEntry({
+          type: 'upload',
+          subjectId: newSub.id,
+          timestamp: new Date().toISOString(),
+          fileName: file.name,
+        });
+        await loadSubjects();
+        setIsUploading(false);
+        setUploadStatus('');
+        Alert.alert(
+          'Upload Complete! 📄',
+          `"${file.name}" was parsed (${uploaded.chunks_count} chunks) indexed into "Study Notes".`,
+          [
+            {
+              text: 'Open Subject',
+              onPress: () => onSelectSubject(apiToSubjectItem(newSub)),
+            },
+            { text: 'OK' },
+          ]
+        );
+      } catch (fallbackErr: any) {
+        Alert.alert('Upload Error', fallbackErr.message || 'Could not upload file.');
+      }
     }
   };
 
@@ -75,62 +215,13 @@ export function HomeScreen({
       if (!result.canceled && result.assets && result.assets.length > 0) {
         const file = result.assets[0];
 
-        // If no subjects exist, automatically create a "General Notes" subject
+        // No subjects yet — always create a new subject from the file.
+        // Otherwise ask the user: create a new subject or add to an existing one.
         if (subjects.length === 0) {
-          setIsUploading(true);
-          setUploadStatus('Creating workspace & parsing notes...');
-          const newSub = await createSubject('General Notes', 'Auto-created workspace for uploaded notes');
-          const uploaded = await uploadMaterial(
-            newSub.id,
-            file.uri,
-            file.name,
-            file.mimeType || 'application/pdf',
-            (file as any).file
-          );
-          await loadSubjects();
-          setIsUploading(false);
-          setUploadStatus('');
-          Alert.alert(
-            'Upload Successful! 📄',
-            `"${file.name}" was parsed (${uploaded.chunks_count} chunks) and added to "General Notes".`,
-            [
-              {
-                text: 'View Notes',
-                onPress: () => onSelectSubject(apiToSubjectItem(newSub)),
-              },
-              { text: 'OK' },
-            ]
-          );
-        } else if (subjects.length === 1) {
-          // Exactly 1 subject: upload directly to it
-          const targetSub = subjects[0];
-          setIsUploading(true);
-          setUploadStatus(`Parsing "${file.name}"...`);
-          const uploaded = await uploadMaterial(
-            parseInt(targetSub.id, 10),
-            file.uri,
-            file.name,
-            file.mimeType || 'application/pdf',
-            (file as any).file
-          );
-          await loadSubjects();
-          setIsUploading(false);
-          setUploadStatus('');
-          Alert.alert(
-            'Upload Complete! 📄',
-            `"${file.name}" (${uploaded.chunks_count} chunks) indexed into "${targetSub.name}".`,
-            [
-              {
-                text: 'Open Subject',
-                onPress: () => onSelectSubject(targetSub),
-              },
-              { text: 'OK' },
-            ]
-          );
+          await createNewSubjectFromFile(file);
         } else {
-          // Multiple subjects: open quick selection modal
           setPendingFile(file);
-          setShowSubjectPickerModal(true);
+          setShowUploadTargetModal(true);
         }
       }
     } catch (err: any) {
@@ -153,6 +244,12 @@ export function HomeScreen({
         pendingFile.mimeType || 'application/pdf',
         (pendingFile as any).file
       );
+      await addMemoryEntry({
+        type: 'upload',
+        subjectId: parseInt(sub.id, 10),
+        timestamp: new Date().toISOString(),
+        fileName: pendingFile.name,
+      });
       await loadSubjects();
       Alert.alert(
         'Upload Complete! 📄',
@@ -179,6 +276,25 @@ export function HomeScreen({
 
   const hasSubjects = subjects.length > 0;
   const continueSubject = hasSubjects ? subjects[0] : null;
+
+  const totalNotes = subjects.reduce((s, sub) => s + sub.materialsCount, 0);
+  const assessedSubjects = subjects.filter((sub) => sub.mastery != null);
+  const avgMastery = assessedSubjects.length
+    ? Math.round(assessedSubjects.reduce((s, sub) => s + (sub.mastery as number), 0) / assessedSubjects.length)
+    : 0;
+  // Hide any recent-quiz entry whose subject no longer exists (e.g. it was
+  // deleted). This is a safety net on top of clearing quiz history on delete,
+  // so the list self-corrects as soon as subjects reload. If subjects failed
+  // to load we can't know what exists, so we show everything.
+  const subjectIds = useMemo(() => new Set(subjects.map((s) => s.id)), [subjects]);
+  const visibleHistory = subjectsLoadFailed
+    ? history
+    : history.filter((a) => a.subjectId == null || subjectIds.has(String(a.subjectId)));
+
+  const quizCount = visibleHistory.length;
+
+  // Personalized study-pulse headline derived from the loaded subjects.
+  const recommendation = useMemo(() => buildRecommendation(subjects), [subjects]);
 
   return (
     <View style={styles.container}>
@@ -225,20 +341,22 @@ export function HomeScreen({
           <View style={styles.summaryCard}>
             <View style={styles.summaryCardHeader}>
               <Text style={styles.summaryEyebrow}>Study pulse</Text>
-              <Text style={styles.summaryBadge}>+12%</Text>
+              <Text style={styles.summaryBadge}>
+                {visibleHistory.length > 0 ? `Last ${visibleHistory[0].pct}%` : 'No quizzes yet'}
+              </Text>
             </View>
-            <Text style={styles.summaryHeadline}>You’re on a strong rhythm.</Text>
+            <Text style={styles.summaryHeadline}>{recommendation}</Text>
             <View style={styles.summaryMetrics}>
               <View style={styles.metricPill}>
-                <Text style={styles.metricValue}>4</Text>
+                <Text style={styles.metricValue}>{totalNotes}</Text>
                 <Text style={styles.metricLabel}>notes</Text>
               </View>
               <View style={styles.metricPill}>
-                <Text style={styles.metricValue}>81%</Text>
+                <Text style={styles.metricValue}>{avgMastery}%</Text>
                 <Text style={styles.metricLabel}>mastery</Text>
               </View>
               <View style={styles.metricPill}>
-                <Text style={styles.metricValue}>2</Text>
+                <Text style={styles.metricValue}>{quizCount}</Text>
                 <Text style={styles.metricLabel}>quizzes</Text>
               </View>
             </View>
@@ -275,7 +393,7 @@ export function HomeScreen({
               <View style={styles.continueInfo}>
                 <Text style={styles.chapterTitle}>{continueSubject.name}</Text>
                 <Text style={styles.chapterMeta}>
-                  {continueSubject.materialsCount} study material(s) • {continueSubject.mastery}% Mastery
+                  {continueSubject.materialsCount} study material(s) • {masteryLabel(continueSubject.mastery)}
                 </Text>
               </View>
             </Pressable>
@@ -315,7 +433,9 @@ export function HomeScreen({
                   style={({ pressed }) => [styles.subjectRow, pressed && styles.cardPressed]}
                 >
                   <Text style={styles.subjectName}>{sub.name}</Text>
-                  <MasteryProgressBar percentage={sub.mastery} width={90} />
+                  <View style={styles.subjectMasteryWrap}>
+                    <MasteryProgressBar percentage={sub.mastery} width={90} />
+                  </View>
                 </Pressable>
               ))}
             </View>
@@ -325,7 +445,84 @@ export function HomeScreen({
             </View>
           )}
         </View>
+
+        <View style={styles.divider} />
+
+        {/* Recent quizzes Section */}
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>Recent quizzes</Text>
+          {visibleHistory.length > 0 ? (
+            <View style={styles.quizHistoryList}>
+              {visibleHistory.map((attempt) => (
+                <Pressable
+                  key={attempt.id}
+                  accessibilityLabel={`Open quiz result for ${attempt.subjectName}`}
+                  onPress={() => onOpenQuizResult(attempt)}
+                  style={({ pressed }) => [styles.quizHistoryRow, pressed && styles.cardPressed]}
+                >
+                  <View style={[styles.quizHistoryDot, { backgroundColor: quizBand(attempt.pct) }]} />
+                  <View style={styles.quizHistoryInfo}>
+                    <Text style={styles.quizHistorySubject}>{attempt.subjectName}</Text>
+                    <Text style={styles.quizHistoryMeta}>
+                      {attempt.score}/{attempt.total} • {attempt.pct}%
+                      {attempt.difficulty ? ` • ${attempt.difficulty}` : ''}
+                    </Text>
+                  </View>
+                  <Text style={styles.quizHistoryDate}>{formatAttemptDate(attempt.createdAt)}</Text>
+                  <ChevronRightIcon size={16} color={colors.textMuted} />
+                </Pressable>
+              ))}
+            </View>
+          ) : (
+            <View style={styles.emptySubjectsBox}>
+              <Text style={styles.emptySubjectsText}>No quizzes yet — finish a quiz to track it here.</Text>
+            </View>
+          )}
+        </View>
       </ScrollView>
+
+      {/* Modal: choose new subject vs existing subject after picking a file */}
+      <Modal
+        visible={showUploadTargetModal}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setShowUploadTargetModal(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <Text style={styles.modalTitle}>Add to a subject?</Text>
+            <Text style={styles.modalSubtitle}>
+              "{pendingFile?.name}" — create a new subject or add it to an existing one?
+            </Text>
+            <Pressable
+              accessibilityLabel="Create new subject"
+              onPress={() => {
+                setShowUploadTargetModal(false);
+                if (pendingFile) createNewSubjectFromFile(pendingFile);
+              }}
+              style={({ pressed }) => [styles.modalSubjectItem, pressed && styles.cardPressed]}
+            >
+              <View style={styles.modalDocBadge}>
+                <DocumentIcon size={16} color={colors.brandGreen} />
+              </View>
+              <Text style={styles.modalSubjectName}>Create new subject</Text>
+            </Pressable>
+            <Pressable
+              accessibilityLabel="Add to existing subject"
+              onPress={() => {
+                setShowUploadTargetModal(false);
+                setShowSubjectPickerModal(true);
+              }}
+              style={({ pressed }) => [styles.modalSubjectItem, pressed && styles.cardPressed]}
+            >
+              <View style={styles.modalDocBadge}>
+                <DocumentIcon size={16} color={colors.brandGreen} />
+              </View>
+              <Text style={styles.modalSubjectName}>Add to existing subject</Text>
+            </Pressable>
+          </View>
+        </View>
+      </Modal>
 
       {/* Modal for choosing subject when uploading from Home */}
       <Modal
@@ -611,6 +808,12 @@ const styles = StyleSheet.create({
     fontFamily: typography.sansMedium,
     fontSize: 16,
     color: colors.textPrimary,
+    flex: 1,
+    flexShrink: 1,
+    marginRight: 12,
+  },
+  subjectMasteryWrap: {
+    flexShrink: 0,
   },
   emptySubjectsBox: {
     padding: 24,
@@ -621,6 +824,50 @@ const styles = StyleSheet.create({
   emptySubjectsText: {
     fontFamily: typography.sansRegular,
     fontSize: 13,
+    color: colors.textMuted,
+  },
+  quizHistoryList: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: colors.borderLight,
+    paddingHorizontal: 16,
+    shadowColor: '#000000',
+    shadowOpacity: 0.03,
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 2,
+  },
+  quizHistoryRow: {
+    height: 64,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.borderLight,
+  },
+  quizHistoryDot: {
+    width: 12,
+    height: 12,
+    borderRadius: 6,
+  },
+  quizHistoryInfo: {
+    flex: 1,
+  },
+  quizHistorySubject: {
+    fontFamily: typography.sansMedium,
+    fontSize: 16,
+    color: colors.textPrimary,
+  },
+  quizHistoryMeta: {
+    fontFamily: typography.sansRegular,
+    fontSize: 12,
+    color: colors.textMuted,
+    marginTop: 2,
+  },
+  quizHistoryDate: {
+    fontFamily: typography.sansMedium,
+    fontSize: 12,
     color: colors.textMuted,
   },
   cardPressed: {

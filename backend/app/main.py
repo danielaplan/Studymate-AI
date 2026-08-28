@@ -19,8 +19,10 @@ Full RAG pipeline endpoints:
 """
 from __future__ import annotations
 
+import datetime
 import json
 import logging
+import math
 import os
 import uuid
 from pathlib import Path
@@ -38,6 +40,8 @@ from .database import (
     ChatMessage,
     Flashcard,
     Material,
+    MasteryCache,
+    QuizAttempt,
     QuizQuestion,
     Subject,
     TextChunk,
@@ -52,12 +56,12 @@ from .document_processor import (
     retrieve_relevant_chunks,
     store_chunks_in_vector_db,
 )
-from .gemini import GeminiService
+from .gemini import AIService
 
 logger = logging.getLogger(__name__)
 
 settings = get_settings()
-gemini_service = GeminiService(settings)
+ai_service = AIService(settings)
 
 UPLOADS_DIR = Path(__file__).parent.parent.parent / "database" / "uploads"
 UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
@@ -100,11 +104,142 @@ class SubjectResponse(BaseModel):
     name: str
     description: Optional[str]
     color_tag: Optional[str]
+    pinned: bool = False
     materials_count: int = 0
-    mastery: float = 0.0
+    mastery: Optional[float] = None  # overall mastery % (0-100) or None if not yet assessed
 
     class Config:
         from_attributes = True
+
+
+# ===========================================================================
+# MASTERY SCORING
+# ===========================================================================
+# Real mastery is derived ONLY from quiz performance (not manually editable).
+# - Recency weighting: weight = exp(-days_since_attempt / 14)  (14-day half-life)
+# - Passive decay: if days_since_last_attempt > 21, mastery *= max(0.5, 1 - (d-21)*0.01)
+#   (floored at 50%, never reaching zero).
+# - Computed per subject (overall) and per topic, then cached in `mastery_cache`.
+
+RECENCY_HALF_LIFE_DAYS = 14.0
+DECAY_START_DAYS = 21.0
+DECAY_PER_DAY = 0.01
+DECAY_FLOOR = 0.5
+CACHE_STALE_DAYS = 1  # recompute at most once per day (for time-decay)
+
+
+def _days_since(dt: Optional[datetime.datetime]) -> float:
+    if dt is None:
+        return 0.0
+    now = datetime.datetime.utcnow()
+    if dt.tzinfo is not None:
+        now = now.replace(tzinfo=datetime.timezone.utc)
+        dt = dt.astimezone(datetime.timezone.utc).replace(tzinfo=None)
+    return max(0.0, (now - dt).total_seconds() / 86400.0)
+
+
+def _recency_weight(days: float) -> float:
+    return math.exp(-days / RECENCY_HALF_LIFE_DAYS)
+
+
+def _apply_passive_decay(value: float, last_days: float) -> float:
+    if last_days <= DECAY_START_DAYS:
+        return value
+    factor = max(DECAY_FLOOR, 1.0 - (last_days - DECAY_START_DAYS) * DECAY_PER_DAY)
+    return value * factor
+
+
+def compute_mastery(
+    attempts: List[QuizAttempt],
+) -> Optional[dict]:
+    """Pure calculation from a list of QuizAttempt rows.
+
+    Returns None when there are no attempts (subject not yet assessed), else
+    {"overall": 0-1, "by_topic": {topic: 0-1}}.
+    """
+    if not attempts:
+        return None
+
+    # Overall (weighted by recency).
+    scores: List[float] = []
+    weights: List[float] = []
+    taken: List[datetime.datetime] = []
+    for a in attempts:
+        scores.append(float(a.score))
+        weights.append(_recency_weight(_days_since(a.taken_at)))
+        taken.append(a.taken_at)
+    overall = sum(s * w for s, w in zip(scores, weights)) / sum(weights)
+    overall = _apply_passive_decay(overall, _days_since(max(taken)))
+    overall = max(0.0, min(1.0, overall))
+
+    # Per topic.
+    by_topic: dict = {}
+    groups: dict = {}
+    for a in attempts:
+        key = a.topic or "General"
+        groups.setdefault(key, []).append(a)
+    for key, grp in groups.items():
+        g_scores = [float(x.score) for x in grp]
+        g_weights = [_recency_weight(_days_since(x.taken_at)) for x in grp]
+        tm = sum(s * w for s, w in zip(g_scores, g_weights)) / sum(g_weights)
+        tm = _apply_passive_decay(tm, _days_since(max(x.taken_at for x in grp)))
+        by_topic[key] = max(0.0, min(1.0, tm))
+
+    return {"overall": overall, "by_topic": by_topic}
+
+
+def to_pct(value: Optional[float]) -> Optional[float]:
+    """Convert a 0-1 mastery value to a 0-100 percentage (or None)."""
+    if value is None:
+        return None
+    return round(value * 100, 1)
+
+
+async def recompute_mastery(subject_id: int, db: AsyncSession) -> Optional[dict]:
+    """Recompute mastery from attempts and persist it to the cache table."""
+    result = await db.execute(
+        select(QuizAttempt).where(QuizAttempt.subject_id == subject_id)
+    )
+    attempts = result.scalars().all()
+    computed = compute_mastery(attempts)  # None if no attempts
+    overall = computed["overall"] if computed else None
+    by_topic = computed["by_topic"] if computed else {}
+    now = datetime.datetime.utcnow()
+
+    cache = await db.get(MasteryCache, subject_id)
+    if cache is None:
+        cache = MasteryCache(subject_id=subject_id)
+        db.add(cache)
+    cache.overall = overall
+    cache.by_topic = json.dumps(by_topic)
+    cache.computed_at = now
+    await db.commit()
+    return {"overall": overall, "assessed": computed is not None, "by_topic": by_topic}
+
+
+async def get_or_compute_mastery(subject_id: int, db: AsyncSession) -> Optional[dict]:
+    """Return cached mastery if fresh (< 1 day), else recompute.
+
+    Returns None only if the subject has never been assessed (no attempts).
+    """
+    cache = await db.get(MasteryCache, subject_id)
+    if (
+        cache is not None
+        and cache.computed_at is not None
+        and cache.overall is not None
+        and _days_since(cache.computed_at) < CACHE_STALE_DAYS
+    ):
+        by_topic = json.loads(cache.by_topic) if cache.by_topic else {}
+        return {"overall": cache.overall, "assessed": True, "by_topic": by_topic}
+    return await recompute_mastery(subject_id, db)
+
+
+async def get_cached_overall_pct(subject_id: int, db: AsyncSession) -> Optional[float]:
+    """Read-only: cached overall mastery % (or None). Never recomputes/writes."""
+    cache = await db.get(MasteryCache, subject_id)
+    if cache is None or cache.overall is None:
+        return None
+    return to_pct(cache.overall)
 
 
 @app.get("/api/subjects", response_model=List[SubjectResponse])
@@ -116,17 +251,14 @@ async def list_subjects(db: AsyncSession = Depends(get_db)):
         mats = await db.execute(select(Material).where(Material.subject_id == s.id))
         mat_count = len(mats.scalars().all())
 
-        fc_result = await db.execute(select(Flashcard).where(Flashcard.subject_id == s.id))
-        flashcards = fc_result.scalars().all()
-        mastery = 0.0
-        if flashcards:
-            mastery = round(sum(f.mastery_score for f in flashcards) / len(flashcards) * 100, 1)
+        mastery = await get_cached_overall_pct(s.id, db)
 
         out.append(SubjectResponse(
             id=s.id,
             name=s.name,
             description=s.description,
             color_tag=s.color_tag,
+            pinned=s.pinned,
             materials_count=mat_count,
             mastery=mastery,
         ))
@@ -152,6 +284,51 @@ async def delete_subject(subject_id: int, db: AsyncSession = Depends(get_db)):
         raise HTTPException(status_code=404, detail="Subject not found.")
     await db.delete(subject)
     await db.commit()
+
+
+class SubjectUpdate(BaseModel):
+    name: Optional[str] = Field(default=None, min_length=1, max_length=255)
+    description: Optional[str] = None
+    color_tag: Optional[str] = None
+    pinned: Optional[bool] = None
+
+
+@app.patch("/api/subjects/{subject_id}", response_model=SubjectResponse)
+async def update_subject(subject_id: int, body: SubjectUpdate, db: AsyncSession = Depends(get_db)):
+    subject = await db.get(Subject, subject_id)
+    if not subject:
+        raise HTTPException(status_code=404, detail="Subject not found.")
+
+    if body.name is not None:
+        existing = await db.execute(select(Subject).where(Subject.name == body.name, Subject.id != subject_id))
+        if existing.scalar_one_or_none():
+            raise HTTPException(status_code=409, detail="A subject with this name already exists.")
+        subject.name = body.name
+    if body.description is not None:
+        subject.description = body.description
+    if body.color_tag is not None:
+        subject.color_tag = body.color_tag
+    if body.pinned is not None:
+        subject.pinned = body.pinned
+
+    await db.commit()
+    await db.refresh(subject)
+
+    # Recalculate counts for response
+    mats = await db.execute(select(Material).where(Material.subject_id == subject.id))
+    mat_count = len(mats.scalars().all())
+
+    mastery = await get_cached_overall_pct(subject.id, db)
+
+    return SubjectResponse(
+        id=subject.id,
+        name=subject.name,
+        description=subject.description,
+        color_tag=subject.color_tag,
+        pinned=subject.pinned,
+        materials_count=mat_count,
+        mastery=mastery,
+    )
 
 
 # ===========================================================================
@@ -278,6 +455,68 @@ async def upload_material(
     )
 
 
+class ExtractTextRequest(BaseModel):
+    filename: str
+    file_type: str
+
+
+class ExtractTextResponse(BaseModel):
+    extracted_text: str
+    suggested_title: str
+    file_type: str
+
+
+@app.post("/api/extract-text-and-suggest-title", response_model=ExtractTextResponse)
+async def extract_text_and_suggest_title(
+    file: UploadFile = File(...),
+):
+    """Extract text from an uploaded file and suggest a subject title using AI.
+    Does not create any database records - just returns extracted text and suggested title."""
+    fname = file.filename or "upload"
+    ext = Path(fname).suffix.lower().lstrip(".")
+    mime_to_extension = {
+        "application/pdf": "pdf",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document": "docx",
+        "application/vnd.openxmlformats-officedocument.presentationml.presentation": "pptx",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": "xlsx",
+        "application/vnd.ms-excel": "xls",
+        "text/plain": "txt",
+        "text/markdown": "md",
+        "text/csv": "csv",
+        "application/json": "json",
+        "application/xml": "xml",
+    }
+    if ext not in SUPPORTED_EXTENSIONS:
+        ext = mime_to_extension.get(file.content_type or "", ext)
+    if ext not in SUPPORTED_EXTENSIONS:
+        raise HTTPException(status_code=415, detail="Unsupported file type.")
+
+    if ext in {"jpg", "jpeg", "png", "tiff", "tif", "bmp", "webp", "gif", "heic", "heif"}:
+        file_type = "image"
+    else:
+        file_type = ext
+
+    file_bytes = await file.read()
+    file_size = len(file_bytes)
+    if file_size == 0:
+        raise HTTPException(status_code=400, detail="The uploaded file is empty.")
+    if file_size > MAX_UPLOAD_SIZE:
+        raise HTTPException(status_code=413, detail="File is too large. Maximum upload size is 50 MB.")
+
+    # Extract text
+    raw_text = extract_text(file_bytes, file_type)
+    clean_extracted_text = clean_text(raw_text)
+
+    # Generate suggested title using AI
+    suggested_title = await ai_service.suggest_subject_title(clean_extracted_text)
+
+    return ExtractTextResponse(
+        extracted_text=clean_extracted_text,
+        suggested_title=suggested_title,
+        file_type=file_type,
+    )
+
+
 @app.get("/api/subjects/{subject_id}/materials", response_model=List[MaterialResponse])
 async def list_materials(subject_id: int, db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(Material).where(Material.subject_id == subject_id))
@@ -367,7 +606,7 @@ async def rag_chat(body: ChatRequest, db: AsyncSession = Depends(get_db)):
     ]
 
     # Generate grounded reply
-    reply = await gemini_service.rag_chat(
+    reply = await ai_service.rag_chat(
         user_question=body.message,
         retrieved_chunks=chunks,
         subject_name=subject_name,
@@ -383,7 +622,7 @@ async def rag_chat(body: ChatRequest, db: AsyncSession = Depends(get_db)):
     return ChatResponse(
         reply=reply,
         retrieved_chunks_count=len(chunks),
-        provider="gemini" if gemini_service.client else "fallback",
+        provider=ai_service.provider,
     )
 
 
@@ -430,7 +669,7 @@ async def generate_summary(
         )
         text = "\n\n".join(chunks)
 
-    summary = await gemini_service.generate_summary(
+    summary = await ai_service.generate_summary(
         material_text=text,
         subject_name=subject.name,
         chapter_title=body.chapter_title,
@@ -445,6 +684,9 @@ async def generate_summary(
 class QuizGenerateRequest(BaseModel):
     topic_tag: Optional[str] = None
     num_questions: int = Field(default=10, ge=3, le=20)
+    difficulty: Optional[str] = None
+    material_id: Optional[int] = None
+    time_limit: Optional[int] = None
     save_to_db: bool = True
 
 
@@ -458,25 +700,33 @@ async def generate_quiz(
     if not subject:
         raise HTTPException(status_code=404, detail="Subject not found.")
 
-    # Load DB chunks for subject
-    db_chunks_res = await db.execute(
+    # Base the retrieval query on the chosen topic/material.
+    query = body.topic_tag or subject.name
+
+    # Load DB chunks for subject (optionally scoped to a single material).
+    chunk_query = (
         select(TextChunk.content)
         .join(Material, TextChunk.material_id == Material.id)
         .where(Material.subject_id == subject_id)
     )
+    if body.material_id is not None:
+        chunk_query = chunk_query.where(TextChunk.material_id == body.material_id)
+    db_chunks_res = await db.execute(chunk_query)
     fallback_chunks = [c[0] for c in db_chunks_res.all()]
 
     chunks = retrieve_relevant_chunks(
         query=query,
         subject_id=subject_id,
+        material_id=body.material_id,
         n_results=8,
         fallback_chunks=fallback_chunks,
     )
-    questions = await gemini_service.generate_quiz(
+    questions = await ai_service.generate_quiz(
         chunks=chunks,
         subject_name=subject.name,
         topic_tag=body.topic_tag,
         num_questions=body.num_questions,
+        difficulty=body.difficulty,
     )
 
     if body.save_to_db and questions:
@@ -516,12 +766,79 @@ async def get_quiz_questions(subject_id: int, db: AsyncSession = Depends(get_db)
 
 
 # ===========================================================================
+# MASTERY — quiz attempt recording & computed mastery
+# ===========================================================================
+
+class QuizAttemptItem(BaseModel):
+    topic: Optional[str] = None
+    correct: bool
+
+
+class QuizAttemptsCreate(BaseModel):
+    attempts: List[QuizAttemptItem]
+
+
+class MasteryResponse(BaseModel):
+    overall: Optional[float] = None  # 0-100, or None if not yet assessed
+    assessed: bool = False
+    by_topic: dict = {}  # {topic: 0-100}
+
+
+@app.post("/api/subjects/{subject_id}/quiz-attempts", response_model=MasteryResponse)
+async def record_quiz_attempts(
+    subject_id: int,
+    body: QuizAttemptsCreate,
+    db: AsyncSession = Depends(get_db),
+):
+    """Record per-question quiz results and recompute cached mastery.
+
+    Each item is one answered question: its topic and whether it was correct.
+    Mastery is derived purely from these attempts (never manually editable).
+    """
+    subject = await db.get(Subject, subject_id)
+    if not subject:
+        raise HTTPException(status_code=404, detail="Subject not found.")
+
+    taken_at = datetime.datetime.utcnow()
+    for item in body.attempts:
+        db.add(QuizAttempt(
+            subject_id=subject_id,
+            topic=item.topic,
+            score=1.0 if item.correct else 0.0,
+            taken_at=taken_at,
+        ))
+    await db.commit()
+
+    computed = await recompute_mastery(subject_id, db)
+    overall_pct = to_pct(computed["overall"]) if computed["overall"] is not None else None
+    by_topic_pct = {k: to_pct(v) for k, v in computed["by_topic"].items()}
+    return MasteryResponse(overall=overall_pct, assessed=computed["assessed"], by_topic=by_topic_pct)
+
+
+@app.get("/api/subjects/{subject_id}/mastery", response_model=MasteryResponse)
+async def get_mastery(subject_id: int, db: AsyncSession = Depends(get_db)):
+    """Return overall + per-topic mastery (cached; recomputed if stale > 1 day)."""
+    subject = await db.get(Subject, subject_id)
+    if not subject:
+        raise HTTPException(status_code=404, detail="Subject not found.")
+
+    result = await get_or_compute_mastery(subject_id, db)
+    if result is None or not result["assessed"]:
+        return MasteryResponse(overall=None, assessed=False, by_topic={})
+    overall_pct = to_pct(result["overall"])
+    by_topic_pct = {k: to_pct(v) for k, v in result["by_topic"].items()}
+    return MasteryResponse(overall=overall_pct, assessed=True, by_topic=by_topic_pct)
+
+
+# ===========================================================================
 # FLASHCARD GENERATION & RETRIEVAL
 # ===========================================================================
 
 class FlashcardGenerateRequest(BaseModel):
     deck_title: Optional[str] = None
     num_cards: int = Field(default=15, ge=5, le=40)
+    material_id: Optional[int] = None
+    focus: Optional[str] = None
     save_to_db: bool = True
 
 
@@ -535,14 +852,32 @@ async def generate_flashcards(
     if not subject:
         raise HTTPException(status_code=404, detail="Subject not found.")
 
-    chunks = retrieve_relevant_chunks(
-        query=body.deck_title or subject.name, subject_id=subject_id, n_results=8
+    query = body.deck_title or subject.name
+
+    # Fallback chunk pool, optionally scoped to a single material.
+    chunk_query = (
+        select(TextChunk.content)
+        .join(Material, TextChunk.material_id == Material.id)
+        .where(Material.subject_id == subject_id)
     )
-    cards = await gemini_service.generate_flashcards(
+    if body.material_id is not None:
+        chunk_query = chunk_query.where(TextChunk.material_id == body.material_id)
+    db_chunks_res = await db.execute(chunk_query)
+    fallback_chunks = [c[0] for c in db_chunks_res.all()]
+
+    chunks = retrieve_relevant_chunks(
+        query=query,
+        subject_id=subject_id,
+        material_id=body.material_id,
+        n_results=8,
+        fallback_chunks=fallback_chunks,
+    )
+    cards = await ai_service.generate_flashcards(
         chunks=chunks,
         subject_name=subject.name,
         deck_title=body.deck_title,
         num_cards=body.num_cards,
+        focus=body.focus,
     )
 
     if body.save_to_db and cards:
@@ -617,7 +952,7 @@ async def root():
 
 @app.get("/health")
 async def health():
-    return {"status": "ok", "service": "studymate-api", "gemini_ready": gemini_service.client is not None}
+    return {"status": "ok", "service": "studymate-api", "ai_ready": ai_service.client is not None, "provider": ai_service.provider}
 
 
 # Legacy test endpoint — kept for mobile backwards compatibility
@@ -632,5 +967,5 @@ class PipelineResponse(BaseModel):
 
 @app.post("/api/test-pipeline", response_model=PipelineResponse)
 async def test_pipeline(request: PipelineRequest) -> PipelineResponse:
-    reply = await gemini_service.generate_test_response(request.message)
-    return PipelineResponse(reply=reply, provider="gemini" if gemini_service.client else "fallback")
+    reply = await ai_service.generate_test_response(request.message)
+    return PipelineResponse(reply=reply, provider="gemini" if ai_service.client else "fallback")
