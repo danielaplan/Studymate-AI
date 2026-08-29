@@ -134,9 +134,9 @@ for a deleted subject.
 
 ## 8. Edge cases
 
-- **No sources active:** default = all subject sources active. Do not allow a
-  zero-source chat; if the user deselects everything, treat as "all" (or disable send
-  with a hint "Select at least one source").
+- **No sources active:** default = all subject sources active. The user may narrow
+  but cannot reach zero: if they deselect every source, the workspace reverts to
+  "all sources active" (no zero-source chat state).
 - **File still processing:** cannot be an active source; row shows disabled state.
 - **Switch subject (context menu):** opens that subject's workspace with all sources
   active by default (matches NotebookLM "open another notebook").
