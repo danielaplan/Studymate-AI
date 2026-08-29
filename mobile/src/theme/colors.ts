@@ -39,6 +39,20 @@ export const colors = {
   borderDark: '#CBC3B7',
   divider: '#E9E5DE',
 
+  // Artifact card palette (AIArtifactCard + suggestion chips). Distinct from the
+  // brand-green chat palette so saved study artifacts read as "your notes", not
+  // chat lines. Values pinned by the artifact redesign spec.
+  artifact: {
+    cardBg: '#FBFAF6',
+    border: '#E7E4D9',
+    tagBg: '#E4EBE6',
+    tagText: '#1B3A2E',
+    ink: '#1B3A2E',
+    inkSoft: '#5B6B62',
+    forestTint: '#E4EBE6',
+    forest: '#1B3A2E',
+  },
+
   // Status & tags
   success: '#2A4A36',
   error: '#B23A3A',

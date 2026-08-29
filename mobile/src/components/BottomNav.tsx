@@ -3,7 +3,6 @@ import { View, Text, StyleSheet, Pressable } from 'react-native';
 import {
   IconHome,
   IconNotebook,
-  IconMessageChatbot,
   IconUser,
 } from '@tabler/icons-react-native';
 import { colors, typography } from '../theme';
@@ -29,11 +28,6 @@ export function BottomNav({ currentTab, onSelectTab }: BottomNavProps) {
       key: 'subjects',
       label: 'Subjects',
       icon: (active) => <IconNotebook size={20} color={active ? colors.brandGreenDark : colors.inactiveTab} strokeWidth={1.8} />,
-    },
-    {
-      key: 'chat',
-      label: 'Chat',
-      icon: (active) => <IconMessageChatbot size={20} color={active ? colors.brandGreenDark : colors.inactiveTab} strokeWidth={1.8} />,
     },
     {
       key: 'profile',

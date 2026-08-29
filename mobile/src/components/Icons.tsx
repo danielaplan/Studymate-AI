@@ -182,11 +182,54 @@ export function ChevronRightIcon({ size = 18, color = colors.textMuted, strokeWi
   );
 }
 
+export function ChevronDownIcon({ size = 18, color = colors.textMuted, strokeWidth = 1.8 }: IconProps) {
+  return (
+    <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
+      <Path d="M6 9L12 15L18 9" stroke={color} strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round" />
+    </Svg>
+  );
+}
+
 export function ClockIcon({ size = 16, color = colors.textMuted, strokeWidth = 1.8 }: IconProps) {
   return (
     <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
       <Circle cx="12" cy="12" r="10" stroke={color} strokeWidth={strokeWidth} />
       <Path d="M12 6V12L16 14" stroke={color} strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round" />
+    </Svg>
+  );
+}
+
+export function EditIcon({ size = 18, color = colors.brandGreen, strokeWidth = 1.8 }: IconProps) {
+  return (
+    <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
+      <Path d="M12 20H21" stroke={color} strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round" />
+      <Path
+        d="M16.5 3.5L20.5 7.5L8 20L3 20L3 15L16.5 3.5Z"
+        stroke={color}
+        strokeWidth={strokeWidth}
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </Svg>
+  );
+}
+
+export function TrashIcon({ size = 18, color = colors.brandGreen, strokeWidth = 1.8 }: IconProps) {
+  return (
+    <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
+      <Path d="M3 6H21" stroke={color} strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round" />
+      <Path d="M8 6V4C8 3.44772 8.44772 3 9 3H15C15.5523 3 16 3.44772 16 4V6" stroke={color} strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round" />
+      <Path d="M6 6L7 20C7 20.5523 7.44772 21 8 21H16C16.5523 21 17 20.5523 17 20L18 6" stroke={color} strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round" />
+      <Path d="M10 11V16M14 11V16" stroke={color} strokeWidth={strokeWidth} strokeLinecap="round" />
+    </Svg>
+  );
+}
+
+export function LayersIcon({ size = 18, color = colors.brandGreen, strokeWidth = 1.8 }: IconProps) {
+  return (
+    <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
+      <Path d="M12 3L21 8L12 13L3 8L12 3Z" stroke={color} strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round" />
+      <Path d="M3 13L12 18L21 13" stroke={color} strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round" />
     </Svg>
   );
 }
@@ -243,6 +286,52 @@ export function ProfileNavIcon({ size = 22, color = colors.inactiveTab, strokeWi
     <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
       <Path d="M20 21V19C20 16.7909 18.2091 15 16 15H8C5.79086 15 4 16.7909 4 19V21" stroke={color} strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round" />
       <Circle cx="12" cy="7" r="4" stroke={color} strokeWidth={strokeWidth} />
+    </Svg>
+  );
+}
+
+export function CopyIcon({ size = 18, color = colors.textMuted, strokeWidth = 1.8 }: IconProps) {
+  return (
+    <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
+      <Rect x="9" y="9" width="11" height="11" rx="2" stroke={color} strokeWidth={strokeWidth} />
+      <Path d="M5 15V5C5 3.89543 5.89543 3 7 3H15" stroke={color} strokeWidth={strokeWidth} strokeLinecap="round" />
+    </Svg>
+  );
+}
+
+export function BookmarkCheckIcon({ size = 18, color = colors.brandGreen, strokeWidth = 1.8 }: IconProps) {
+  return (
+    <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
+      <Path d="M6 4H18C19.1046 4 20 4.89543 20 6V21L12 16L4 21V6C4 4.89543 4.89543 4 6 4Z" stroke={color} strokeWidth={strokeWidth} strokeLinejoin="round" />
+      <Path d="M9 10L11 12L15 8" stroke={color} strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round" />
+    </Svg>
+  );
+}
+
+export function RefreshIcon({ size = 18, color = colors.textMuted, strokeWidth = 1.8 }: IconProps) {
+  return (
+    <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
+      <Path d="M20 11A8 8 0 103 19" stroke={color} strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round" />
+      <Path d="M20 5V11H14" stroke={color} strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round" />
+    </Svg>
+  );
+}
+
+export function QuizIcon({ size = 18, color = colors.brandGreen, strokeWidth = 1.8 }: IconProps) {
+  return (
+    <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
+      <Circle cx="12" cy="12" r="9" stroke={color} strokeWidth={strokeWidth} />
+      <Path d="M9.5 9.5C9.5 8.4 10.4 7.5 12 7.5C13.6 7.5 14.5 8.3 14.5 9.4C14.5 10.7 13.3 11 12 11.8" stroke={color} strokeWidth={strokeWidth} strokeLinecap="round" />
+      <Path d="M12 15.5H12.01" stroke={color} strokeWidth={strokeWidth * 1.6} strokeLinecap="round" />
+    </Svg>
+  );
+}
+
+export function FlashcardIcon({ size = 18, color = colors.brandGreen, strokeWidth = 1.8 }: IconProps) {
+  return (
+    <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
+      <Rect x="3" y="6" width="14" height="11" rx="2" stroke={color} strokeWidth={strokeWidth} transform="rotate(-6 10 11)" />
+      <Rect x="7" y="8" width="14" height="11" rx="2" stroke={color} strokeWidth={strokeWidth} />
     </Svg>
   );
 }

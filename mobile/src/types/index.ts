@@ -88,11 +88,29 @@ export interface ChatMessage {
   materialTag?: string;
   bulletPoints?: { title: string; content: string }[];
   summary?: SummaryAPI;
+  // Artifact classification: when set, the message renders as an AIArtifactCard
+  // (not a plain bubble). 'chat' messages stay as normal chat bubbles.
+  artifactType?: 'summary' | 'quiz' | 'flashcards';
+  // Structured payload backing the artifact card (lead/body/details). Present for
+  // summary/quiz/flashcards messages; absent for plain chat.
+  artifact?: ArtifactPayload;
   // Chat-hub launcher card: a ready-to-open quiz or flashcard deck. Tapping the
   // button hands off to the existing QuizScreen / FlashcardsScreen with prefs.
   action?: ChatAction;
   // Chat-hub conversational setup question (asked in-thread, chips inline).
   setup?: ChatSetupQuestion;
+}
+
+// Payload rendered by AIArtifactCard. `details` is the collapsible richer
+// content (key terms, questions, or cards) kept out of the lead/body skim.
+export interface ArtifactPayload {
+  lead: string;
+  body: string;
+  details?: {
+    title: string;
+    items: { term?: string; text: string }[];
+  };
+  sourceChunks?: number[];
 }
 
 // Launcher card payload rendered inside a chat bubble (chat-hub feature).

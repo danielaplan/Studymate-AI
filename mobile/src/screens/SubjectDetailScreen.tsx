@@ -3,11 +3,13 @@ import { View, Text, StyleSheet, Pressable, ScrollView, ActivityIndicator, Alert
 import * as DocumentPicker from 'expo-document-picker';
 import { colors, typography } from '../theme';
 import { Header } from '../components/Header';
+import { ScreenContextBar } from '../components/ScreenContextBar';
 import { CardsSetupSheet, CardsPrefs } from '../components/CardsSetupSheet';
 import { MasteryProgressBar } from '../components/MasteryProgressBar';
 import { SparklesIcon, DocumentIcon, ScanIcon, ChevronRightIcon } from '../components/Icons';
 import { SubjectItem, FocusArea, MasteryDetail } from '../types';
 import { listMaterials, uploadMaterial, deleteMaterial, generateSummary, getSubjectMastery, MaterialAPI, SummaryAPI } from '../api/client';
+import { getCachedSummary, setCachedSummary, clearCachedSummary } from '../storage/summaryCache';
 import { addMemoryEntry, loadSubjectMemory, MemoryEntry, MemoryEntryType } from '../storage/subjectMemory';
 
 interface SubjectDetailScreenProps {
@@ -20,16 +22,14 @@ interface SubjectDetailScreenProps {
   onStartCards?: (prefs: CardsPrefs) => void;
   onOpenMaterial: (material: MaterialAPI) => void;
   onExpandSummary?: (summary: SummaryAPI) => void;
+  // Hide the global header's left icon (menu) since back lives in the local bar.
+  hideLeft?: boolean;
 }
 
-// Session-level cache: keeps a generated summary per subject, keyed by how many
-// source materials it was built from. Avoids re-summarizing on every tab/screen
-// switch. Only regenerates when the source set changes (new upload / delete).
-interface CachedSummary {
-  summary: SummaryAPI;
-  sourceCount: number;
-}
-const summaryCache = new Map<number, CachedSummary>();
+// Device-level (AsyncStorage) cache: keeps a generated summary per subject,
+// keyed by how many source materials it was built from. Avoids re-summarizing
+// on every tab/screen switch and survives app refresh/restart (no re-burn of
+// AI quota). Only regenerates when the source set changes (new upload / delete).
 
 // A summary is considered "failed" when the backend returned its fallback
 // (generation was throttled/empty). We must not cache or display that as if
@@ -87,6 +87,7 @@ export function SubjectDetailScreen({
   onStartCards,
   onOpenMaterial,
   onExpandSummary,
+  hideLeft,
 }: SubjectDetailScreenProps) {
   const [materials, setMaterials] = useState<MaterialAPI[]>([]);
   const [summary, setSummary] = useState<SummaryAPI | null>(null);
@@ -116,7 +117,7 @@ export function SubjectDetailScreen({
       const data = await generateSummary(subjectIdNum);
       // Don't cache/overwrite a good summary with a throttled failure.
       if (isSummaryFailed(data)) return;
-      summaryCache.set(subjectIdNum, { summary: data, sourceCount });
+      await setCachedSummary(subjectIdNum, { summary: data, sourceCount });
       setSummary(data);
     } catch (error: any) {
       console.log('Could not load summary:', error?.message);
@@ -136,9 +137,9 @@ export function SubjectDetailScreen({
       // - no materials -> clear any cached summary
       // - matching source count in cache -> reuse it, no API call
       // - source count changed (upload/delete) -> regenerate
-      const cached = summaryCache.get(subjectIdNum);
+      const cached = await getCachedSummary(subjectIdNum);
       if (data.length === 0) {
-        summaryCache.delete(subjectIdNum);
+        await clearCachedSummary(subjectIdNum);
         setSummary(null);
       } else if (cached && cached.sourceCount === data.length && !isSummaryFailed(cached.summary)) {
         setSummary(cached.summary);
@@ -225,14 +226,14 @@ export function SubjectDetailScreen({
 
   return (
     <View style={styles.container}>
-      <Header showBack onBack={onBack} onProfile={onProfile} />
+      <Header onBack={onBack} onProfile={onProfile} hideLeft={hideLeft} />
+
+      {/* Local back row only — subject name is already shown as the screen
+          title below, so no tile here. Back lives in this bar, not in the
+          global STUDYMATE header (which stays untouched for a future redesign). */}
+      <ScreenContextBar onBack={onBack} />
 
       <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
-        {/* Breadcrumb */}
-        <View style={styles.breadcrumbRow}>
-          <Text style={styles.breadcrumbText}>SUBJECTS &gt;</Text>
-        </View>
-
         {/* Large Serif Title */}
         <Text style={styles.title}>{subject.name}</Text>
 

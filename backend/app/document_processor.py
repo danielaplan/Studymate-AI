@@ -201,6 +201,7 @@ def retrieve_relevant_chunks(
     query: str,
     subject_id: Optional[int] = None,
     material_id: Optional[int] = None,
+    material_ids: Optional[List[int]] = None,
     n_results: int = 5,
     fallback_chunks: Optional[List[str]] = None,
 ) -> List[str]:
@@ -211,14 +212,18 @@ def retrieve_relevant_chunks(
     collection = _get_chroma_collection()
     if collection is not None:
         try:
-            # Scope the vector search by subject and (optionally) a single material.
+            # Scope the vector search by subject and (optionally) by material(s).
+            # `material_id` scopes to a single file; `material_ids` scopes to a set
+            # of files (NotebookLM-style source selection) via a ChromaDB `$in`.
             where = None
-            if subject_id is not None or material_id is not None:
+            if subject_id is not None or material_id is not None or (material_ids is not None and len(material_ids) > 0):
                 where = {}
                 if subject_id is not None:
                     where["subject_id"] = subject_id
                 if material_id is not None:
                     where["material_id"] = material_id
+                if material_ids is not None and len(material_ids) > 0:
+                    where["material_id"] = {"$in": material_ids}
             results = collection.query(
                 query_texts=[query],
                 n_results=n_results,

@@ -23,32 +23,6 @@ interface QuizScreenProps {
   timeLimit?: number | null;
 }
 
-const FALLBACK_QUESTIONS: QuizQuestion[] = [
-  {
-    id: '1',
-    topic: 'NETWORKING FUNDAMENTALS',
-    questionNumber: 1,
-    totalQuestions: 2,
-    questionText: 'What is the primary function of a network router?',
-    options: [
-      'To connect devices within a LAN and forward data based on MAC addresses.',
-      'To forward packets between networks based on destination IP addresses.',
-      'To modulate digital signals into analog for transmission.',
-      'To assign domain names to hardware MAC addresses.',
-    ],
-    correctIndex: 1,
-  },
-  {
-    id: '2',
-    topic: 'NETWORKING FUNDAMENTALS',
-    questionNumber: 2,
-    totalQuestions: 2,
-    questionText: 'Which OSI layer is responsible for reliable end-to-end communication?',
-    options: ['Data Link Layer (2)', 'Network Layer (3)', 'Transport Layer (4)', 'Session Layer (5)'],
-    correctIndex: 2,
-  },
-];
-
 function apiToQuizQuestion(api: QuizQuestionAPI, idx: number, total: number): QuizQuestion {
   return {
     id: String(api.id ?? idx),
@@ -80,12 +54,15 @@ export function QuizScreen({
   sourceMaterialId,
   timeLimit,
 }: QuizScreenProps) {
-  const [questions, setQuestions] = useState<QuizQuestion[]>(FALLBACK_QUESTIONS);
+  // No subject = no grounded content. NEVER show sample questions in this case
+  // (the old initial state silently quizzed on fake content — audit A2).
+  const [questions, setQuestions] = useState<QuizQuestion[]>([]);
   const [currentIdx, setCurrentIdx] = useState(0);
   const [selectedOption, setSelectedOption] = useState<number | null>(null);
   const [answers, setAnswers] = useState<QuizAnswer[]>([]);
   const [isCompleted, setIsCompleted] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
+  const [loadFailed, setLoadFailed] = useState(false);
   const [secondsLeft, setSecondsLeft] = useState<number | null>(null);
 
   // Keep the latest questions available to the timer closure so it can mark
@@ -109,6 +86,7 @@ export function QuizScreen({
   const loadOrGenerateQuiz = async () => {
     if (!subjectId) return;
     setIsLoading(true);
+    setLoadFailed(false);
     try {
       let apiQs: QuizQuestionAPI[];
       if (customConfig) {
@@ -131,7 +109,8 @@ export function QuizScreen({
       setAnswers([]);
       setIsCompleted(false);
     } catch {
-      setQuestions(FALLBACK_QUESTIONS);
+      // Offline/generation failure = explicit error state, NOT fake content.
+      setLoadFailed(true);
     } finally {
       setIsLoading(false);
     }
@@ -243,6 +222,38 @@ export function QuizScreen({
     );
   }
 
+  // No subject selected → quizzes are built from a subject's notes; there is
+  // nothing to quiz on. Guide the user instead of faking content (audit A2).
+  if (!subjectId || loadFailed || questions.length === 0) {
+    return (
+      <View style={styles.container}>
+        <Header showClose onClose={onClose} />
+        <View style={styles.emptyState}>
+          <Text style={styles.emptyTitle}>
+            {loadFailed ? 'Couldn’t load your quiz' : 'Pick a subject first'}
+          </Text>
+          <Text style={styles.emptyText}>
+            {loadFailed
+              ? 'We couldn’t reach the server or generate questions. Check your connection and try again.'
+              : 'Quizzes are built from a subject’s notes. Open a subject and start a quiz from there.'}
+          </Text>
+          <Pressable
+            accessibilityLabel="Back to subjects"
+            onPress={() => {
+              if (loadFailed) loadOrGenerateQuiz();
+              else onClose();
+            }}
+            style={({ pressed }) => [styles.emptyButton, pressed && styles.submitButtonPressed]}
+          >
+            <Text style={styles.emptyButtonText}>
+              {loadFailed ? 'Try again' : 'Back to subjects'}
+            </Text>
+          </Pressable>
+        </View>
+      </View>
+    );
+  }
+
   if (isCompleted) {
     return (
       <QuizOverview
@@ -308,6 +319,11 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.background },
   scrollContent: { paddingHorizontal: 20, paddingTop: 24, paddingBottom: 40 },
   loadingState: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 16 },
+  emptyState: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 32, gap: 8 },
+  emptyTitle: { fontFamily: typography.serifBold, fontSize: 24, lineHeight: 32, color: colors.textPrimary, textAlign: 'center', marginBottom: 4 },
+  emptyText: { fontFamily: typography.sansRegular, fontSize: 14, lineHeight: 21, color: colors.textMuted, textAlign: 'center', marginBottom: 16 },
+  emptyButton: { height: 48, borderRadius: 24, backgroundColor: '#1E221D', alignItems: 'center', justifyContent: 'center', paddingHorizontal: 28 },
+  emptyButtonText: { fontFamily: typography.sansSemiBold, fontSize: 14, color: '#FFFFFF' },
   loadingText: { fontFamily: typography.sansRegular, fontSize: 14, color: colors.textMuted, textAlign: 'center' },
   counterRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 },
   counterText: { fontFamily: typography.sansSemiBold, fontSize: 11, color: colors.textMuted, letterSpacing: 1.5 },

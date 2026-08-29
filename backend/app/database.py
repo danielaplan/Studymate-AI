@@ -51,6 +51,7 @@ class Subject(Base):
     chat_history = relationship("ChatMessage", back_populates="subject", cascade="all, delete-orphan")
     quiz_attempts = relationship("QuizAttempt", back_populates="subject", cascade="all, delete-orphan")
     mastery_cache = relationship("MasteryCache", back_populates="subject", uselist=False, cascade="all, delete-orphan")
+    study_artifacts = relationship("StudyArtifact", back_populates="subject", cascade="all, delete-orphan")
 
 
 class Material(Base):
@@ -161,6 +162,29 @@ class MasteryCache(Base):
     computed_at = Column(DateTime, default=datetime.datetime.utcnow)
 
     subject = relationship("Subject", back_populates="mastery_cache")
+
+
+class StudyArtifact(Base):
+    """A saved AI-generated study artifact (summary / quiz / flashcards).
+
+    Persisted when the student taps "Save to notes" on an AIArtifactCard so it
+    survives app restart. `details_json` holds the structured payload
+    (key terms, questions, cards) as JSON; `source_chunks` records the chunk
+    IDs the artifact was grounded in.
+    """
+
+    __tablename__ = "study_artifacts"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    subject_id = Column(Integer, ForeignKey("subjects.id"), nullable=False)
+    type = Column(String(16), nullable=False)  # summary | quiz | flashcards
+    lead = Column(Text, nullable=False)
+    body = Column(Text, nullable=False)
+    details_json = Column(Text, nullable=True)
+    source_chunks = Column(Text, nullable=True)  # JSON list of chunk ids
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+
+    subject = relationship("Subject", back_populates="study_artifacts")
 
 
 # ---------------------------------------------------------------------------

@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { View, Text, StyleSheet, Pressable, ScrollView, ActivityIndicator } from 'react-native';
 import { colors, typography } from '../theme';
 import { Header } from '../components/Header';
+import { ScreenContextBar } from '../components/ScreenContextBar';
 import { DocumentIcon, SparklesIcon } from '../components/Icons';
 import { generateSummary, SummaryAPI } from '../api/client';
 import { addMemoryEntry } from '../storage/subjectMemory';
@@ -14,6 +15,9 @@ interface SummaryScreenProps {
   subjectId?: number;
   subjectName?: string;
   chapterTitle?: string;
+  // Universal back (Summary is always a pushed screen).
+  onBack?: () => void;
+  hideLeft?: boolean;
 }
 
 export function SummaryScreen({
@@ -24,6 +28,8 @@ export function SummaryScreen({
   subjectId,
   subjectName,
   chapterTitle,
+  onBack,
+  hideLeft,
 }: SummaryScreenProps) {
   const [summaryData, setSummaryData] = useState<SummaryAPI | null>(null);
   const [isLoading, setIsLoading] = useState(false);
@@ -72,16 +78,11 @@ export function SummaryScreen({
 
   return (
     <View style={styles.container}>
-      <Header onMenu={onOpenMenu} onProfile={onOpenProfile} />
+      <Header onMenu={onOpenMenu} onProfile={onOpenProfile} hideLeft={hideLeft} />
+
+      <ScreenContextBar onBack={onBack ?? (() => {})} subjectName={subjectName} subtitle={chapterTitle} />
 
       <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
-        {/* Subject Tag */}
-        <View style={styles.tagRow}>
-          <Text style={styles.tagText}>
-            📖 {subjectName ? subjectName.toUpperCase() : 'COURSE MATERIALS'}
-          </Text>
-        </View>
-
         {/* Title */}
         <Text style={styles.title}>{title}</Text>
 

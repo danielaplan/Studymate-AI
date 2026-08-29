@@ -2,17 +2,22 @@ import { useState, useEffect, useRef } from 'react';
 import { View, Text, StyleSheet, TextInput, Pressable, ScrollView, ActivityIndicator, Alert, Modal, Animated } from 'react-native';
 import { colors, typography } from '../theme';
 import { Header } from '../components/Header';
-import { SearchIcon, CloseIcon } from '../components/Icons';
+import { SearchIcon, CloseIcon, BackIcon } from '../components/Icons';
 import { SubjectCard } from '../components/SubjectCard';
 import { SubjectItem } from '../types';
 import { listSubjects, createSubject, deleteSubject, updateSubject, SubjectAPI } from '../api/client';
 import { clearSubjectMemory } from '../storage/subjectMemory';
 import { clearQuizHistoryForSubject } from '../storage/quizHistory';
+import { clearChatThread } from '../storage/chatThread';
 
 interface SubjectsScreenProps {
   onOpenMenu: () => void;
   onOpenProfile: () => void;
   onSelectSubject: (subject: SubjectItem) => void;
+  // When provided, the screen is shown as a dismissible overlay (e.g. the
+  // workspace "Switch subject" picker) with a Back/✕ that closes it instead of
+  // the global header menu. The underlying workspace stays mounted beneath.
+  onClose?: () => void;
 }
 
 function apiToSubjectItem(api: SubjectAPI): SubjectItem {
@@ -26,7 +31,7 @@ function apiToSubjectItem(api: SubjectAPI): SubjectItem {
   };
 }
 
-export function SubjectsScreen({ onOpenMenu, onOpenProfile, onSelectSubject }: SubjectsScreenProps) {
+export function SubjectsScreen({ onOpenMenu, onOpenProfile, onSelectSubject, onClose }: SubjectsScreenProps) {
   const [subjects, setSubjects] = useState<SubjectItem[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
   const [isLoading, setIsLoading] = useState(true);
@@ -151,6 +156,7 @@ export function SubjectsScreen({ onOpenMenu, onOpenProfile, onSelectSubject }: S
       // Remove this subject's on-device data alongside it.
       clearSubjectMemory(parseInt(subject.id)).catch(() => {});
       clearQuizHistoryForSubject(parseInt(subject.id)).catch(() => {});
+      clearChatThread(parseInt(subject.id)).catch(() => {});
     } catch (err: any) {
       // Rollback on error - reload from server
       Alert.alert('Could not delete subject', err.message || 'Unknown error');
@@ -166,7 +172,21 @@ export function SubjectsScreen({ onOpenMenu, onOpenProfile, onSelectSubject }: S
 
   return (
     <View style={styles.container}>
-      <Header onMenu={onOpenMenu} onProfile={onOpenProfile} />
+      {onClose ? (
+        <View style={styles.overlayTopBar}>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Close subjects"
+            onPress={onClose}
+            style={({ pressed }) => [styles.overlayBackBtn, pressed && styles.overlayBackPressed]}
+          >
+            <BackIcon size={20} color={colors.brandGreen} />
+            <Text style={styles.overlayTopTitle}>Subjects</Text>
+          </Pressable>
+        </View>
+      ) : (
+        <Header onMenu={onOpenMenu} onProfile={onOpenProfile} />
+      )}
       <ScrollView contentContainerStyle={styles.scrollContent} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
         <Text style={styles.libraryTitle}>Subjects Library</Text>
 
@@ -315,6 +335,27 @@ export function SubjectsScreen({ onOpenMenu, onOpenProfile, onSelectSubject }: S
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.background },
+  overlayTopBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    paddingTop: 14,
+    paddingBottom: 10,
+    backgroundColor: colors.background,
+  },
+  overlayBackBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingVertical: 6,
+    paddingRight: 12,
+  },
+  overlayBackPressed: { opacity: 0.6 },
+  overlayTopTitle: {
+    fontFamily: typography.sansSemiBold,
+    fontSize: 16,
+    color: colors.brandGreen,
+  },
   scrollContent: { paddingHorizontal: 20, paddingTop: 28, paddingBottom: 32 },
   libraryTitle: { fontFamily: typography.display, fontSize: 34, color: colors.textPrimary, marginBottom: 22, letterSpacing: -0.8 },
   searchRow: {

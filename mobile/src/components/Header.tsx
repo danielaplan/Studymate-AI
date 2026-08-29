@@ -15,6 +15,10 @@ interface HeaderProps {
   onProfile?: () => void;
   rightActionText?: string;
   onRightAction?: () => void;
+  // When a screen renders its own local back row above a subject tile (the
+  // pushed-screen pattern), the global header's left icon is hidden so the two
+  // backs don't collide. Profile stays on the right.
+  hideLeft?: boolean;
 }
 
 export function Header({
@@ -27,11 +31,12 @@ export function Header({
   onProfile,
   rightActionText,
   onRightAction,
+  hideLeft = false,
 }: HeaderProps) {
   return (
     <View style={styles.container}>
       <View style={styles.leftContainer}>
-        {showBack ? (
+        {hideLeft ? null : showBack ? (
           <Pressable
             accessibilityLabel="Go back"
             onPress={onBack}

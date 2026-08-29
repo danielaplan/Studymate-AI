@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   View,
   Text,
@@ -14,15 +14,21 @@ import {
 import * as DocumentPicker from 'expo-document-picker';
 import { colors, typography } from '../theme';
 import { Header } from '../components/Header';
-import { FolderIcon, SparklesIcon, PaperclipIcon, MicIcon, SendIcon, ChevronRightIcon } from '../components/Icons';
-import { ChatMessage, ChatAction, ChatSetupQuestion } from '../types';
-import { sendChatMessage, uploadMaterial, createSubject, generateSummary, SummaryAPI } from '../api/client';
+import { ScreenContextBar } from '../components/ScreenContextBar';
+import { ChatContextMenu } from '../components/ChatContextMenu';
+import { FolderIcon, SparklesIcon, PaperclipIcon, MicIcon, SendIcon, ChevronRightIcon, DocumentIcon, QuizIcon, FlashcardIcon, ChatNavIcon } from '../components/Icons';
+import { AIArtifactCard } from '../components/AIArtifactCard';
+import { ChatMessage, ChatAction, ChatSetupQuestion, SubjectItem, ArtifactPayload } from '../types';
+import { sendChatMessage, uploadMaterial, createSubject, generateSummary, generateQuiz, generateFlashcards, saveArtifact, listSubjects, SubjectAPI, SummaryAPI } from '../api/client';
 import { addMemoryEntry, loadChatMemory } from '../storage/subjectMemory';
+import { loadChatThread, saveChatThread } from '../storage/chatThread';
 import { detectIntent } from '../utils/intent';
 
 interface ChatScreenProps {
-  onOpenMenu: () => void;
-  onOpenProfile: () => void;
+  // Required when NOT embedded (standalone Chat tab); the workspace renders its
+  // own Header, so these are optional in embedded mode.
+  onOpenMenu?: () => void;
+  onOpenProfile?: () => void;
   initialPrompt?: string;
   subjectId?: number;
   subjectName?: string;
@@ -31,11 +37,31 @@ interface ChatScreenProps {
   // When set (opened from the subject's "Explain" quick action), the suggestion
   // row shows tappable "Explain: <term>" chips derived from the subject summary.
   explainTerms?: { term: string; explanation: string }[] | null;
+  // Universal back (pushed screens only): the local back row + edge swipe /
+  // hardware back call this. Undefined when chat is a tab root (no back).
+  onBack?: () => void;
+  // Hide the global header's left icon (menu) when a local back row is shown.
+  hideLeft?: boolean;
+  // Chat hub: open the subject picker from a subject-scoped chat to switch to a
+  // different subject's thread (the tile is tappable only when this is set).
+  onSwitchSubject?: () => void;
   // Chat hub: hand off to the EXISTING quiz / flashcard screens with the prefs
   // collected in-chat (launcher card buttons). Kept optional so other callers
   // of ChatScreen are unaffected.
   onStartQuiz?: (prefs: { questionCount: number; difficulty: 'easy' | 'medium' | 'hard'; timeLimit: number | null }) => void;
   onStartCards?: (prefs: { cardCount: number; focus: 'definitions' | 'concepts' | 'qa' }) => void;
+  // Front door (audit B1): when the Chat tab opens with no subject selected,
+  // the screen shows a subject picker instead of a contextless chat. Tapping a
+  // subject selects it (App-level state) so the chat becomes subject-scoped.
+  onSelectSubject?: (subject: SubjectItem) => void;
+  // Subject Workspace (2026-08-30): the set of materials currently grounding
+  // this chat. When provided, messages are scoped to only these sources.
+  materialIds?: number[];
+  // Subject Workspace (2026-08-30): when true the screen is embedded inside
+  // SubjectWorkspaceScreen, which already renders the Header + back/subject tile.
+  // Embedded mode skips its own Header, ScreenContextBar, and the no-subject
+  // picker (a subject is guaranteed by the workspace).
+  embedded?: boolean;
 }
 
 function renderFormattedReply(text: string) {
@@ -67,7 +93,7 @@ function renderFormattedReply(text: string) {
       ))}
       {sourceMatch && (
         <Text style={styles.sourceLabel}>
-          Sources: {sourceMatch[1].replace(/CHUNK\s+/gi, 'Chunk ')}
+          Grounded in your notes · Chunks {sourceMatch[1].replace(/CHUNK\s+/gi, '')}
         </Text>
       )}
     </>
@@ -112,6 +138,14 @@ function SummaryCard({ summary }: { summary: SummaryAPI }) {
   );
 }
 
+// The thread's starting message — also what the context-menu "New chat" resets to.
+const WELCOME_MESSAGE: ChatMessage = {
+  id: 'welcome',
+  sender: 'ai',
+  text: 'Welcome to StudyMate AI. Ask me any questions about your course materials, or tap the paperclip icon to upload new notes.',
+  timestamp: 'Ready',
+};
+
 export function ChatScreen({
   onOpenMenu,
   onOpenProfile,
@@ -121,9 +155,20 @@ export function ChatScreen({
   initialSummary,
   onSummaryConsumed,
   explainTerms,
+  onBack,
+  hideLeft,
+  onSwitchSubject,
   onStartQuiz,
   onStartCards,
+  onSelectSubject,
+  materialIds,
+  embedded,
 }: ChatScreenProps) {
+  // Guards the one-shot auto-send below so it fires exactly once per mount
+  // (React StrictMode double-invokes effects in dev, which would otherwise
+  // send the seeded prompt twice and render two summary cards).
+  const autoSentRef = useRef(false);
+
   const [messages, setMessages] = useState<ChatMessage[]>(() => {
     if (initialSummary) {
       // Start with the structured summary already generated (no API call).
@@ -135,6 +180,7 @@ export function ChatScreen({
           timestamp: 'Summary',
           materialTag: 'SUBJECT SUMMARY',
           summary: initialSummary,
+          artifactType: 'summary',
         },
       ];
     }
@@ -143,18 +189,22 @@ export function ChatScreen({
         { id: Date.now().toString(), sender: 'user', text: initialPrompt, timestamp: 'Just now' },
       ];
     }
-    return [
-      {
-        id: 'welcome',
-        sender: 'ai',
-        text: 'Welcome to StudyMate AI. Ask me any questions about your course materials, or tap the paperclip icon to upload new notes.',
-        timestamp: 'Ready',
-      },
-    ];
+    return [WELCOME_MESSAGE];
   });
   const [inputText, setInputText] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
+  // Context-menu (▼ subject tile) open/close state.
+  const [menuOpen, setMenuOpen] = useState(false);
+
+  // When an artifact (summary) is being generated, show its card in a skeleton
+  // state (final shape, no layout shift) instead of a bouncing typing indicator.
+  const [pendingArtifact, setPendingArtifact] = useState<'summary' | 'quiz' | 'flashcards' | null>(null);
+
+  // Front door (audit B1): subjects list + load state for the no-subject
+  // picker shown when the Chat tab opens without a selected subject.
+  const [pickerSubjects, setPickerSubjects] = useState<SubjectItem[] | null>(null);
+  const [pickerLoading, setPickerLoading] = useState(false);
 
   // When opened from a subject's summary card ("Both" mode): fire one chat call
   // to generate a short intro line that frames the topic, shown above the
@@ -205,9 +255,36 @@ export function ChatScreen({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Load prior on-device chat memory for this subject so conversations are
-  // remembered across sessions (visible history + continued context). Skips
-  // when the screen was opened with a preset prompt or summary.
+  // Front door (audit B1): with no subject selected, load the subject list so
+  // the user can pick what to chat about. Only runs when the picker is shown
+  // (subjectId missing, no pre-filled prompt/summary handoff in flight).
+  useEffect(() => {
+    if (subjectId || initialPrompt || initialSummary) return;
+    if (!onSelectSubject) return;
+    setPickerLoading(true);
+    listSubjects()
+      .then((apis: SubjectAPI[]) => {
+        setPickerSubjects(
+          apis.map((api) => ({
+            id: String(api.id),
+            name: api.name,
+            materialsCount: api.materials_count,
+            mastery: api.mastery == null ? null : Math.round(api.mastery),
+            description: api.description,
+            pinned: api.pinned,
+          }))
+        );
+      })
+      .catch(() => setPickerSubjects([]))
+      .finally(() => setPickerLoading(false));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [subjectId]);
+
+  // Durable thread (audit B2): restore the FULL conversation on open — not
+  // just text, but summary cards, launcher cards, and in-progress setup chips.
+  // Skips when opened with a preset prompt or summary handoff (those seed
+  // their own opening state). The subjectMemory 'chat' entries below remain
+  // the plain-text record for the notebook/recap panel.
   useEffect(() => {
     if (!subjectId) return;
     if (initialPrompt) {
@@ -221,21 +298,39 @@ export function ChatScreen({
       return;
     }
     if (initialSummary) return;
-    loadChatMemory(subjectId)
-      .then((entries) => {
-        if (entries.length === 0) return;
-        setMessages(
-          entries.map((e) => ({
-            id: e.id,
-            sender: e.role === 'user' ? 'user' : 'ai',
-            text: e.text || '',
-            timestamp: 'Saved',
-          }))
-        );
+    loadChatThread(subjectId, materialIds)
+      .then((saved) => {
+        if (saved.length === 0) {
+          // Fall back to the legacy plain-text memory (pre-B2 history recorded
+          // by earlier sessions) so long-time users don't see an empty thread.
+          loadChatMemory(subjectId)
+            .then((entries) => {
+              if (entries.length === 0) return;
+              setMessages(
+                entries.map((e) => ({
+                  id: e.id,
+                  sender: e.role === 'user' ? 'user' : 'ai',
+                  text: e.text || '',
+                  timestamp: 'Saved',
+                }))
+              );
+            })
+            .catch(() => {});
+          return;
+        }
+        setMessages(saved);
       })
       .catch(() => {});
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [subjectId]);
+
+  // Persist the whole thread (including launcher/summary/setup payloads)
+  // whenever it changes, so a tab switch or app restart never loses it.
+  useEffect(() => {
+    if (!subjectId) return;
+    saveChatThread(subjectId, messages, materialIds).catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [messages, subjectId]);
 
   const handleAttachFile = async () => {
     try {
@@ -293,6 +388,13 @@ export function ChatScreen({
     }
   };
 
+  // Context-menu "New chat": start a fresh thread for this subject. The durable
+  // persist effect saves it, so the cleared thread survives a tab switch / app
+  // restart (re-opening the subject shows the welcome, not the old thread).
+  const handleNewChat = () => {
+    setMessages([WELCOME_MESSAGE]);
+  };
+
   // Persist a chat message into this subject's on-device memory (no-op when
   // the chat isn't tied to a subject).
   const persistChat = (role: 'user' | 'ai', text?: string) => {
@@ -344,7 +446,7 @@ export function ChatScreen({
   const sendPlainChat = async (prompt: string) => {
     setIsLoading(true);
     try {
-      const data = await sendChatMessage(prompt, subjectId);
+      const data = await sendChatMessage(prompt, subjectId, materialIds);
       const reply = data.reply;
       appendAiMessage({
         text: reply,
@@ -364,11 +466,13 @@ export function ChatScreen({
   const handleSummaryIntent = async () => {
     if (subjectId == null) return;
     setIsLoading(true);
+    setPendingArtifact('summary');
     try {
       const summary = await generateSummary(subjectId);
       appendAiMessage({
         materialTag: subjectName ? `${subjectName.toUpperCase()} SUMMARY` : 'SUBJECT SUMMARY',
         summary,
+        artifactType: 'summary',
       });
       persistChat('ai', `Generated a summary of ${subjectName ?? 'the subject'}.`);
     } catch (err: any) {
@@ -378,6 +482,7 @@ export function ChatScreen({
       });
     } finally {
       setIsLoading(false);
+      setPendingArtifact(null);
     }
   };
 
@@ -530,6 +635,90 @@ export function ChatScreen({
     }
   };
 
+  // Renders an AI study artifact (summary / quiz / flashcards) as a card instead
+  // of a chat bubble. Wires Copy (handled in the card), Save to notes (backend),
+  // Regenerate (re-fires the generator for that message), and Open (quiz/cards).
+  const renderArtifact = (msg: ChatMessage) => {
+    if (msg.summary) {
+      const s = msg.summary;
+      const lead = s.lead || s.subtitle || '';
+      const body = s.body || (s.overview_paragraphs || []).join(' ');
+      const details = {
+        title: 'Key points',
+        items: [
+          ...(s.key_terms || []).map((kt) => ({ term: kt.term, text: kt.explanation })),
+          ...(s.takeaways || []).map((t) => ({ text: t })),
+        ],
+      };
+      const canSave = subjectId != null;
+      return (
+        <AIArtifactCard
+          type="summary"
+          leadText={lead}
+          bodyText={body}
+          details={details}
+          onSave={
+            canSave
+              ? async () =>
+                  saveArtifact(subjectId!, { type: 'summary', lead, body, details, sourceChunks: [] })
+              : undefined
+          }
+          onRegenerate={async () => {
+            if (subjectId == null) return;
+            setPendingArtifact('summary');
+            try {
+              const fresh = await generateSummary(subjectId);
+              setMessages((prev) => prev.map((m) => (m.id === msg.id ? { ...m, summary: fresh } : m)));
+            } finally {
+              setPendingArtifact(null);
+            }
+          }}
+        />
+      );
+    }
+
+    if (msg.action) {
+      const a = msg.action;
+      const isQuiz = a.kind === 'quiz';
+      const lead = a.label;
+      const body = isQuiz
+        ? 'A quiz built from your notes is ready to test your understanding.'
+        : 'A flashcard deck built from your notes is ready to review.';
+      const canSave = subjectId != null;
+      return (
+        <AIArtifactCard
+          type={isQuiz ? 'quiz' : 'flashcards'}
+          leadText={lead}
+          bodyText={body}
+          onOpen={() => handleOpenAction(a)}
+          onOpenLabel={isQuiz ? 'Open full quiz →' : 'Open flashcards →'}
+          onSave={
+            canSave
+              ? async () => saveArtifact(subjectId!, { type: a.kind, lead, body })
+              : undefined
+          }
+          onRegenerate={async () => {
+            if (subjectId == null) return;
+            try {
+              if (isQuiz) {
+                await generateQuiz(subjectId, {
+                  numQuestions: a.questionCount,
+                  difficulty: a.difficulty,
+                  timeLimit: a.timeLimit,
+                });
+              } else {
+                await generateFlashcards(subjectId, { numCards: a.cardCount, focus: a.focus });
+              }
+            } catch {
+              /* best-effort regenerate; the deck in the DB refreshes if it succeeds */
+            }
+          }}
+        />
+      );
+    }
+    return null;
+  };
+
   const submitPrompt = async (rawText: string) => {
     const prompt = rawText.trim();
     if (!prompt) return;
@@ -554,19 +743,17 @@ export function ChatScreen({
   // answer (or an in-chat quiz/flashcards/summary flow) without tapping send.
   useEffect(() => {
     if (!initialPrompt || initialSummary) return;
+    if (autoSentRef.current) return;
+    autoSentRef.current = true;
     routePrompt(initialPrompt);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const contextLabel = subjectName
-    ? `${subjectName.toUpperCase()} MATERIALS`
-    : 'ALL STUDY MATERIALS';
-
-  const promptSuggestions = [
-    'Explain the main ideas in these notes.',
-    'Create a short quiz from this material.',
-    'Turn this into flashcards.',
-    'Summarize the key takeaways.',
+  const promptSuggestionDefs: { label: string; icon: React.ComponentType<{ size?: number; color?: string }> }[] = [
+    { label: 'Explain the main ideas in these notes.', icon: ChatNavIcon },
+    { label: 'Create a short quiz from this material.', icon: QuizIcon },
+    { label: 'Turn this into flashcards.', icon: FlashcardIcon },
+    { label: 'Summarize the key takeaways.', icon: DocumentIcon },
   ];
 
   // Explain-mode: derive tappable "Explain: <term>" chips from the subject's
@@ -574,180 +761,249 @@ export function ChatScreen({
   // If no summary terms are available, fall back to the fixed prompt chips.
   const explainChips = (() => {
     if (!explainTerms || explainTerms.length === 0) return null;
-    const chips: { label: string; onTap: () => void }[] = explainTerms.slice(0, 6).map((kt) => ({
+    const chips: { label: string; onTap: () => void; icon: React.ComponentType<{ size?: number; color?: string }> }[] = explainTerms.slice(0, 6).map((kt) => ({
       label: `Explain: ${kt.term}`,
       onTap: () => submitPrompt(`Explain "${kt.term}" from my study notes.`),
+      icon: SparklesIcon,
     }));
-    chips.push({ label: 'Main ideas', onTap: () => submitPrompt('Explain the main ideas in these notes.') });
-    chips.push({ label: 'Simplify it', onTap: () => submitPrompt('Explain the key concepts in plain, simple language.') });
+    chips.push({ label: 'Main ideas', onTap: () => submitPrompt('Explain the main ideas in these notes.'), icon: SparklesIcon });
+    chips.push({ label: 'Simplify it', onTap: () => submitPrompt('Explain the key concepts in plain, simple language.'), icon: SparklesIcon });
     return chips;
   })();
 
-  const suggestions = explainChips ?? promptSuggestions.map((p) => ({ label: p, onTap: () => setInputText(p) }));
+  const suggestions =
+    explainChips ??
+    promptSuggestionDefs.map((p) => ({ label: p.label, onTap: () => setInputText(p.label), icon: p.icon }));
+
+  // Front door (audit B1): no subject selected and this screen can select one →
+  // show the picker instead of a contextless chat. The user picks a subject,
+  // App-level state updates, and this screen re-renders as the scoped hub.
+  const showSubjectPicker = !embedded && !subjectId && !initialPrompt && !initialSummary && !!onSelectSubject;
+  if (showSubjectPicker) {
+    return (
+      <KeyboardAvoidingView
+        style={styles.container}
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+      >
+        <Header onMenu={onOpenMenu} onProfile={onOpenProfile} />
+        <View style={styles.pickerWrap}>
+          <Text style={styles.pickerTitle}>What are we studying?</Text>
+          <Text style={styles.pickerSubtitle}>
+            Pick a subject to chat with. Quizzes, flashcards, and summaries are built from its notes.
+          </Text>
+
+          {pickerLoading && (
+            <View style={styles.pickerLoading}>
+              <ActivityIndicator color={colors.brandGreen} size="small" />
+              <Text style={styles.pickerLoadingText}>Loading your subjects…</Text>
+            </View>
+          )}
+
+          {!pickerLoading && pickerSubjects && pickerSubjects.length === 0 && (
+            <View style={styles.pickerEmptyCard}>
+              <Text style={styles.pickerEmptyTitle}>No subjects yet</Text>
+              <Text style={styles.pickerEmptyText}>
+                Upload your first set of notes from Home and StudyMate will create a subject for you.
+              </Text>
+              <Pressable
+                accessibilityLabel="Go to subjects"
+                onPress={onOpenMenu}
+                style={({ pressed }) => [styles.pickerButton, pressed && styles.pickerButtonPressed]}
+              >
+                <Text style={styles.pickerButtonText}>Go to Home</Text>
+              </Pressable>
+            </View>
+          )}
+
+          {!pickerLoading && pickerSubjects && pickerSubjects.length > 0 && (
+            <ScrollView style={styles.pickerList} contentContainerStyle={styles.pickerListContent} showsVerticalScrollIndicator={false}>
+              {pickerSubjects.map((s) => (
+                <Pressable
+                  key={s.id}
+                  accessibilityLabel={`Chat about ${s.name}`}
+                  onPress={() => onSelectSubject?.(s)}
+                  style={({ pressed }) => [styles.pickerRow, pressed && styles.pickerRowPressed]}
+                >
+                  <View style={styles.pickerRowIcon}>
+                    <FolderIcon size={18} color={colors.brandGreen} />
+                  </View>
+                  <View style={styles.pickerRowInfo}>
+                    <Text style={styles.pickerRowName} numberOfLines={1}>{s.name}</Text>
+                    <Text style={styles.pickerRowMeta}>
+                      {s.materialsCount} {s.materialsCount === 1 ? 'material' : 'materials'}
+                    </Text>
+                  </View>
+                  <ChevronRightIcon size={18} color={colors.textMuted} />
+                </Pressable>
+              ))}
+            </ScrollView>
+          )}
+        </View>
+      </KeyboardAvoidingView>
+    );
+  }
 
   return (
     <KeyboardAvoidingView
       style={styles.container}
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
     >
-      <Header onMenu={onOpenMenu} onProfile={onOpenProfile} />
+      {!embedded && <Header onMenu={onOpenMenu} onProfile={onOpenProfile} hideLeft={hideLeft} />}
+
+      {/* Local back row + subject tile (pushed chat only). The tile is tapped
+          to switch subjects; the global STUDYMATE header never carries back. */}
+      {onBack && (
+        <ScreenContextBar
+          onBack={onBack}
+          subjectName={subjectName}
+          onContextMenu={() => setMenuOpen(true)}
+        />
+      )}
 
       <ScrollView
         contentContainerStyle={styles.scrollContent}
         keyboardShouldPersistTaps="handled"
         showsVerticalScrollIndicator={false}
       >
-        {/* Context Material Badge */}
-        <View style={styles.contextBadge}>
-          <FolderIcon size={14} color={colors.textMuted} />
-          <Text style={styles.contextBadgeText}>{contextLabel}</Text>
-        </View>
-
-        <View style={styles.promptSuggestions}>
-          {suggestions.map((s) => (
-            <Pressable
-              key={s.label}
-              accessibilityLabel={`Use prompt ${s.label}`}
-              onPress={s.onTap}
-              style={({ pressed }) => [styles.promptChip, pressed && styles.promptChipPressed]}
-            >
-              <Text style={styles.promptChipText}>{s.label}</Text>
-            </Pressable>
-          ))}
-        </View>
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          keyboardShouldPersistTaps="handled"
+          contentContainerStyle={styles.promptSuggestions}
+        >
+          {suggestions.map((s) => {
+            const ChipIcon = s.icon;
+            return (
+              <Pressable
+                key={s.label}
+                accessibilityLabel={`Use prompt ${s.label}`}
+                onPress={s.onTap}
+                style={({ pressed }) => [styles.promptChip, pressed && styles.promptChipPressed]}
+              >
+                <ChipIcon size={15} color={colors.artifact.forest} />
+                <Text style={styles.promptChipText}>{s.label}</Text>
+              </Pressable>
+            );
+          })}
+        </ScrollView>
 
         {/* Message Thread */}
         <View style={styles.thread}>
-          {messages.map((msg) => (
-            <View
-              key={msg.id}
-              style={[styles.messageBubble, msg.sender === 'user' ? styles.userBubble : styles.aiBubble]}
-            >
-              {msg.sender === 'ai' && (
-                <View style={styles.aiHeader}>
-                  <SparklesIcon size={16} color={colors.brandGreen} />
-                  <Text style={styles.aiLabel}>STUDYMATE AI</Text>
-                </View>
-              )}
-
-              {msg.materialTag && (
-                <View style={styles.materialTagBadge}>
-                  <Text style={styles.materialTagText}>{msg.materialTag}</Text>
-                </View>
-              )}
-
-              {msg.summary ? (
-                <SummaryCard summary={msg.summary} />
-              ) : msg.sender === 'ai' ? (
-                <View style={styles.replyContent}>{renderFormattedReply(msg.text)}</View>
-              ) : (
-                <Text style={styles.messageText}>{msg.text}</Text>
-              )}
-
-              {msg.bulletPoints && (
-                <View style={styles.bulletsContainer}>
-                  {msg.bulletPoints.map((bp, idx) => (
-                    <View key={idx} style={styles.bulletItem}>
-                      <Text style={styles.bulletTitle}>• {bp.title}:</Text>
-                      <Text style={styles.bulletContent}>{bp.content}</Text>
-                    </View>
-                  ))}
-                </View>
-              )}
-
-              {/* Chat-hub launcher card: opens the existing quiz/flashcards
-                  screen with the prefs collected in-chat. */}
-              {msg.action && (
-                <Pressable
-                  accessibilityLabel={`Open ${msg.action.label}`}
-                  onPress={() => handleOpenAction(msg.action!)}
-                  style={({ pressed }) => [styles.launcherCard, pressed && styles.launcherCardPressed]}
-                >
-                  <View style={styles.launcherIconBadge}>
-                    <SparklesIcon size={18} color={colors.brandGreen} />
+          {messages.map((msg) =>
+            msg.artifactType || msg.action ? (
+              <View key={msg.id} style={styles.artifactWrap}>
+                {renderArtifact(msg)}
+              </View>
+            ) : (
+              <View
+                key={msg.id}
+                style={[styles.messageBubble, msg.sender === 'user' ? styles.userBubble : styles.aiBubble]}
+              >
+                {msg.sender === 'ai' && (
+                  <View style={styles.aiHeader}>
+                    <SparklesIcon size={16} color={colors.brandGreen} />
+                    <Text style={styles.aiLabel}>STUDYMATE AI</Text>
                   </View>
-                  <View style={styles.launcherInfo}>
-                    <Text style={styles.launcherLabel}>{msg.action.label}</Text>
-                    <Text style={styles.launcherHint}>
-                      {msg.action.kind === 'quiz' ? 'Tap to start the quiz' : 'Tap to start reviewing'}
-                    </Text>
-                  </View>
-                  <ChevronRightIcon size={18} color={colors.textMuted} />
-                </Pressable>
-              )}
+                )}
 
-              {/* Chat-hub conversational setup: chips live inside the asking
-                  bubble, and only while it's still the last (unanswered)
-                  message. Answering strips them and posts the user's answer. */}
-              {msg.setup && msg.id === messages[messages.length - 1]?.id && (
-                <View style={styles.setupChips}>
-                  {msg.setup.stage === 'choice' &&
-                    ([
-                      { label: 'Quiz me', value: 'quiz' },
-                      { label: 'Flashcards', value: 'flashcards' },
-                      { label: 'Summarize it', value: 'summary' },
-                    ] as const).map((c) => (
-                      <Pressable
-                        key={c.value}
-                        onPress={() => handleSetupChoice(msg.id, c.value)}
-                        style={({ pressed }) => [styles.setupChip, pressed && styles.setupChipPressed]}
-                      >
-                        <Text style={styles.setupChipText}>{c.label}</Text>
-                      </Pressable>
+                {msg.materialTag && (
+                  <View style={styles.materialTagBadge}>
+                    <Text style={styles.materialTagText}>{msg.materialTag}</Text>
+                  </View>
+                )}
+
+                {msg.summary ? (
+                  <SummaryCard summary={msg.summary} />
+                ) : msg.sender === 'ai' ? (
+                  <View style={styles.replyContent}>{renderFormattedReply(msg.text)}</View>
+                ) : (
+                  <Text style={styles.messageText}>{msg.text}</Text>
+                )}
+
+                {msg.bulletPoints && (
+                  <View style={styles.bulletsContainer}>
+                    {msg.bulletPoints.map((bp, idx) => (
+                      <View key={idx} style={styles.bulletItem}>
+                        <Text style={styles.bulletTitle}>• {bp.title}:</Text>
+                        <Text style={styles.bulletContent}>{bp.content}</Text>
+                      </View>
                     ))}
-                  {msg.setup.stage === 'count' &&
-                    [5, 10, 15, 20].map((n) => (
-                      <Pressable
-                        key={n}
-                        onPress={() => handleSetupCount(msg.id, msg.setup!, n)}
-                        style={({ pressed }) => [styles.setupChip, pressed && styles.setupChipPressed]}
-                      >
-                        <Text style={styles.setupChipText}>{n}</Text>
-                      </Pressable>
-                    ))}
-                  {msg.setup.stage === 'difficulty' &&
-                    (['easy', 'medium', 'hard'] as const).map((d) => (
-                      <Pressable
-                        key={d}
-                        onPress={() => handleSetupDifficulty(msg.id, msg.setup!, d)}
-                        style={({ pressed }) => [styles.setupChip, pressed && styles.setupChipPressed]}
-                      >
-                        <Text style={styles.setupChipText}>{d.charAt(0).toUpperCase() + d.slice(1)}</Text>
-                      </Pressable>
-                    ))}
-                  {msg.setup.stage === 'time' &&
-                    ([
-                      { label: 'Off', value: null },
-                      { label: '5 min', value: 5 },
-                      { label: '10 min', value: 10 },
-                      { label: '15 min', value: 15 },
-                    ] as { label: string; value: number | null }[]).map((t) => (
-                      <Pressable
-                        key={t.label}
-                        onPress={() => handleSetupTime(msg.id, msg.setup!, t.value)}
-                        style={({ pressed }) => [styles.setupChip, pressed && styles.setupChipPressed]}
-                      >
-                        <Text style={styles.setupChipText}>{t.label}</Text>
-                      </Pressable>
-                    ))}
-                  {msg.setup.stage === 'focus' &&
-                    ([
-                      { label: 'Definitions', value: 'definitions' },
-                      { label: 'Concepts', value: 'concepts' },
-                      { label: 'Q & A', value: 'qa' },
-                    ] as const).map((f) => (
-                      <Pressable
-                        key={f.value}
-                        onPress={() => handleSetupFocus(msg.id, msg.setup!, f.value)}
-                        style={({ pressed }) => [styles.setupChip, pressed && styles.setupChipPressed]}
-                      >
-                        <Text style={styles.setupChipText}>{f.label}</Text>
-                      </Pressable>
-                    ))}
-                </View>
-              )}
-            </View>
-          ))}
+                  </View>
+                )}
+
+                {/* Chat-hub conversational setup: chips live inside the asking
+                    bubble, and only while it's still the last (unanswered)
+                    message. Answering strips them and posts the user's answer. */}
+                {msg.setup && msg.id === messages[messages.length - 1]?.id && (
+                  <View style={styles.setupChips}>
+                    {msg.setup.stage === 'choice' &&
+                      ([
+                        { label: 'Quiz me', value: 'quiz' },
+                        { label: 'Flashcards', value: 'flashcards' },
+                        { label: 'Summarize it', value: 'summary' },
+                      ] as const).map((c) => (
+                        <Pressable
+                          key={c.value}
+                          onPress={() => handleSetupChoice(msg.id, c.value)}
+                          style={({ pressed }) => [styles.setupChip, pressed && styles.setupChipPressed]}
+                        >
+                          <Text style={styles.setupChipText}>{c.label}</Text>
+                        </Pressable>
+                      ))}
+                    {msg.setup.stage === 'count' &&
+                      [5, 10, 15, 20].map((n) => (
+                        <Pressable
+                          key={n}
+                          onPress={() => handleSetupCount(msg.id, msg.setup!, n)}
+                          style={({ pressed }) => [styles.setupChip, pressed && styles.setupChipPressed]}
+                        >
+                          <Text style={styles.setupChipText}>{n}</Text>
+                        </Pressable>
+                      ))}
+                    {msg.setup.stage === 'difficulty' &&
+                      (['easy', 'medium', 'hard'] as const).map((d) => (
+                        <Pressable
+                          key={d}
+                          onPress={() => handleSetupDifficulty(msg.id, msg.setup!, d)}
+                          style={({ pressed }) => [styles.setupChip, pressed && styles.setupChipPressed]}
+                        >
+                          <Text style={styles.setupChipText}>{d.charAt(0).toUpperCase() + d.slice(1)}</Text>
+                        </Pressable>
+                      ))}
+                    {msg.setup.stage === 'time' &&
+                      ([
+                        { label: 'Off', value: null },
+                        { label: '5 min', value: 5 },
+                        { label: '10 min', value: 10 },
+                        { label: '15 min', value: 15 },
+                      ] as { label: string; value: number | null }[]).map((t) => (
+                        <Pressable
+                          key={t.label}
+                          onPress={() => handleSetupTime(msg.id, msg.setup!, t.value)}
+                          style={({ pressed }) => [styles.setupChip, pressed && styles.setupChipPressed]}
+                        >
+                          <Text style={styles.setupChipText}>{t.label}</Text>
+                        </Pressable>
+                      ))}
+                    {msg.setup.stage === 'focus' &&
+                      ([
+                        { label: 'Definitions', value: 'definitions' },
+                        { label: 'Concepts', value: 'concepts' },
+                        { label: 'Q & A', value: 'qa' },
+                      ] as const).map((f) => (
+                        <Pressable
+                          key={f.value}
+                          onPress={() => handleSetupFocus(msg.id, msg.setup!, f.value)}
+                          style={({ pressed }) => [styles.setupChip, pressed && styles.setupChipPressed]}
+                        >
+                          <Text style={styles.setupChipText}>{f.label}</Text>
+                        </Pressable>
+                      ))}
+                  </View>
+                )}
+              </View>
+            )
+          )}
 
           {isUploading && (
             <View style={styles.loadingIndicator}>
@@ -756,7 +1012,11 @@ export function ChatScreen({
             </View>
           )}
 
-          {isLoading && (
+          {isLoading && pendingArtifact ? (
+            <View style={styles.artifactWrap}>
+              <AIArtifactCard type={pendingArtifact} leadText="" bodyText="" loading />
+            </View>
+          ) : isLoading && (
             <View style={styles.typingBubble}>
               <View style={styles.aiHeader}>
                 <SparklesIcon size={16} color={colors.brandGreen} />
@@ -765,7 +1025,7 @@ export function ChatScreen({
               <View style={styles.typingRow}>
                 <ActivityIndicator color={colors.brandGreen} size="small" />
                 <Text style={styles.loadingText}>
-                  {initialSummary ? 'Preparing your summary…' : 'Generating a response…'}
+                  {initialSummary ? 'Preparing your summary…' : 'Reading your notes…'}
                 </Text>
               </View>
             </View>
@@ -813,6 +1073,12 @@ export function ChatScreen({
           </Pressable>
         </View>
       </View>
+      <ChatContextMenu
+        visible={menuOpen}
+        onClose={() => setMenuOpen(false)}
+        onSwitchSubject={onSwitchSubject}
+        onNewChat={handleNewChat}
+      />
     </KeyboardAvoidingView>
   );
 }
@@ -837,36 +1103,57 @@ function isGenerationErrorReply(reply: string): boolean {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.background },
   scrollContent: { paddingHorizontal: 20, paddingTop: 16, paddingBottom: 24 },
+  // Front door (audit B1): no-subject picker
+  pickerWrap: { flex: 1, paddingHorizontal: 20, paddingTop: 24 },
+  pickerTitle: { fontFamily: typography.serifBold, fontSize: 28, lineHeight: 36, color: colors.textPrimary, marginBottom: 8 },
+  pickerSubtitle: { fontFamily: typography.sansRegular, fontSize: 14, lineHeight: 21, color: colors.textMuted, marginBottom: 24 },
+  pickerLoading: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 20, justifyContent: 'center' },
+  pickerLoadingText: { fontFamily: typography.sansRegular, fontSize: 13, color: colors.textMuted },
+  pickerEmptyCard: { backgroundColor: colors.brandGreenSoft, borderRadius: 16, borderWidth: 1, borderColor: colors.brandGreenLight, padding: 20, alignItems: 'center', gap: 8 },
+  pickerEmptyTitle: { fontFamily: typography.serifBold, fontSize: 20, color: colors.textPrimary },
+  pickerEmptyText: { fontFamily: typography.sansRegular, fontSize: 13.5, lineHeight: 20, color: colors.textSecondary, textAlign: 'center', marginBottom: 8 },
+  pickerButton: { height: 44, borderRadius: 22, backgroundColor: '#1E221D', alignItems: 'center', justifyContent: 'center', paddingHorizontal: 24 },
+  pickerButtonPressed: { opacity: 0.85 },
+  pickerButtonText: { fontFamily: typography.sansSemiBold, fontSize: 14, color: '#FFFFFF' },
+  pickerList: { flex: 1 },
+  pickerListContent: { paddingBottom: 24, gap: 10 },
+  pickerRow: { flexDirection: 'row', alignItems: 'center', gap: 12, backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: colors.borderLight, borderRadius: 14, paddingHorizontal: 14, paddingVertical: 14 },
+  pickerRowPressed: { opacity: 0.8 },
+  pickerRowIcon: { width: 38, height: 38, borderRadius: 12, backgroundColor: colors.brandGreenSoft, alignItems: 'center', justifyContent: 'center' },
+  pickerRowInfo: { flex: 1, gap: 2 },
+  pickerRowName: { fontFamily: typography.sansSemiBold, fontSize: 15, color: colors.textPrimary },
+  pickerRowMeta: { fontFamily: typography.sansRegular, fontSize: 12.5, color: colors.textMuted },
   contextBadge: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 14, paddingHorizontal: 6 },
   contextBadgeText: { fontFamily: typography.sansSemiBold, fontSize: 11, color: colors.textMuted, letterSpacing: 1.3 },
-  promptSuggestions: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 18 },
-  promptChip: { backgroundColor: '#F7F5F1', borderWidth: 1, borderColor: colors.borderLight, borderRadius: 999, paddingHorizontal: 10, paddingVertical: 8 },
-  promptChipPressed: { opacity: 0.75 },
-  promptChipText: { fontFamily: typography.sansMedium, fontSize: 12, color: colors.textPrimary },
+  promptSuggestions: { flexDirection: 'row', gap: 8, marginBottom: 16, paddingRight: 24 },
+  promptChip: { backgroundColor: colors.artifact.forestTint, borderWidth: 1, borderColor: '#D3E0D6', borderRadius: 20, paddingHorizontal: 14, paddingVertical: 9, flexDirection: 'row', alignItems: 'center', gap: 7 },
+  promptChipPressed: { opacity: 0.7, backgroundColor: colors.artifact.tagBg },
+  promptChipText: { fontFamily: typography.sansMedium, fontSize: 12.5, lineHeight: 16, color: colors.artifact.forest },
+  artifactWrap: { marginBottom: 18 },
   thread: { gap: 18 },
   messageBubble: { padding: 16, borderRadius: 20 },
-  userBubble: { backgroundColor: '#F7F5F0', borderWidth: 1, borderColor: colors.borderLight, alignSelf: 'flex-end', maxWidth: '90%', shadowColor: '#000000', shadowOpacity: 0.02, shadowRadius: 8, shadowOffset: { width: 0, height: 3 }, elevation: 1 },
-  aiBubble: { backgroundColor: 'transparent', paddingHorizontal: 0 },
+  userBubble: { backgroundColor: colors.brandGreen, borderWidth: 0, alignSelf: 'flex-end', maxWidth: '88%', borderTopLeftRadius: 18, borderTopRightRadius: 18, borderBottomLeftRadius: 18, borderBottomRightRadius: 4, shadowColor: '#1A2C21', shadowOpacity: 0.14, shadowRadius: 12, shadowOffset: { width: 0, height: 4 }, elevation: 3 },
+  aiBubble: { backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: colors.borderLight, borderLeftWidth: 3, borderLeftColor: colors.brandGreen, alignSelf: 'flex-start', maxWidth: '92%', shadowColor: '#1A2C21', shadowOpacity: 0.05, shadowRadius: 8, shadowOffset: { width: 0, height: 2 }, elevation: 1 },
   aiHeader: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 8 },
   aiLabel: { fontFamily: typography.sansSemiBold, fontSize: 11, color: colors.brandGreen, letterSpacing: 1.5 },
   materialTagBadge: { alignSelf: 'flex-start', backgroundColor: colors.brandGreenSoft, borderRadius: 999, paddingHorizontal: 8, paddingVertical: 4, marginBottom: 10 },
   materialTagText: { fontFamily: typography.sansSemiBold, fontSize: 10, letterSpacing: 1.2, textTransform: 'uppercase', color: colors.brandGreen },
-  messageText: { fontFamily: typography.sansRegular, fontSize: 15, lineHeight: 24, color: colors.textPrimary },
+  messageText: { fontFamily: typography.sansRegular, fontSize: 15, lineHeight: 24, color: '#FFFFFF' },
   replyContent: { gap: 2 },
   replyLine: { fontFamily: typography.sansRegular, fontSize: 15, lineHeight: 24, color: colors.textPrimary },
   replySpacer: { height: 10 },
   replyStrong: { fontFamily: typography.sansSemiBold, color: colors.textPrimary },
   replyCode: { fontFamily: typography.sansMedium, color: colors.brandGreen, backgroundColor: colors.sageBadge, borderRadius: 6, overflow: 'hidden', paddingHorizontal: 5, paddingVertical: 2 },
-  sourceLabel: { marginTop: 12, fontFamily: typography.sansMedium, fontSize: 12, lineHeight: 18, color: colors.textMuted },
+  sourceLabel: { marginTop: 12, paddingTop: 10, borderTopWidth: 1, borderTopColor: colors.borderLight, fontFamily: typography.sansMedium, fontSize: 11.5, lineHeight: 16, color: colors.textMuted, letterSpacing: 0.2 },
   bulletsContainer: { marginTop: 14, gap: 12 },
   bulletItem: { gap: 4 },
   bulletTitle: { fontFamily: typography.sansSemiBold, fontSize: 14, color: colors.textPrimary },
   bulletContent: { fontFamily: typography.sansRegular, fontSize: 14, lineHeight: 22, color: colors.textSecondary, paddingLeft: 12 },
   summaryCard: {
-    backgroundColor: colors.brandGreenSoft,
+    backgroundColor: '#FFFFFF',
     borderRadius: 16,
     borderWidth: 1,
-    borderColor: colors.brandGreenLight,
+    borderColor: colors.borderLight,
     padding: 16,
     gap: 10,
   },
@@ -927,21 +1214,30 @@ const styles = StyleSheet.create({
   loadingIndicator: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 12 },
   loadingText: { fontFamily: typography.sansRegular, fontSize: 13, color: colors.textMuted },
   typingBubble: {
-    backgroundColor: colors.brandGreenSoft,
+    backgroundColor: '#FFFFFF',
     borderRadius: 18,
     borderWidth: 1,
-    borderColor: colors.brandGreenLight,
+    borderColor: colors.borderLight,
+    borderLeftWidth: 3,
+    borderLeftColor: colors.brandGreen,
     paddingVertical: 14,
     paddingHorizontal: 16,
     gap: 8,
+    alignSelf: 'flex-start',
+    maxWidth: '92%',
+    shadowColor: '#1A2C21',
+    shadowOpacity: 0.05,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 2 },
+    elevation: 1,
   },
   typingRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
-  inputBar: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 14, paddingVertical: 10, backgroundColor: 'rgba(255, 255, 255, 0.72)', borderTopWidth: 1, borderTopColor: colors.line, gap: 10 },
-  textInput: { flex: 1, fontFamily: typography.sansRegular, fontSize: 15, color: colors.textPrimary, maxHeight: 90, paddingVertical: 8, paddingHorizontal: 12, backgroundColor: colors.surfaceMuted, borderRadius: 14, borderWidth: 1, borderColor: colors.borderLight },
-  actionButtons: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  iconBtn: { width: 34, height: 34, borderRadius: 10, backgroundColor: colors.surfaceElevated, borderWidth: 1, borderColor: colors.borderLight, alignItems: 'center', justifyContent: 'center' },
-  sendBtn: { width: 38, height: 38, borderRadius: 12, backgroundColor: colors.brandGreen, alignItems: 'center', justifyContent: 'center', shadowColor: '#000000', shadowOpacity: 0.08, shadowRadius: 8, shadowOffset: { width: 0, height: 4 }, elevation: 2 },
-  sendBtnDisabled: { backgroundColor: '#C2C7BC' },
+  inputBar: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 8, paddingVertical: 7, backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: colors.borderLight, borderRadius: 22, marginHorizontal: 12, marginBottom: 10, gap: 8, shadowColor: '#1A2C21', shadowOpacity: 0.06, shadowRadius: 12, shadowOffset: { width: 0, height: -2 }, elevation: 3 },
+  textInput: { flex: 1, fontFamily: typography.sansRegular, fontSize: 15, color: colors.textPrimary, maxHeight: 90, paddingVertical: 9, paddingHorizontal: 14, backgroundColor: 'transparent', borderRadius: 16 },
+  actionButtons: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  iconBtn: { width: 34, height: 34, borderRadius: 10, backgroundColor: 'transparent', alignItems: 'center', justifyContent: 'center' },
+  sendBtn: { width: 40, height: 40, borderRadius: 20, backgroundColor: colors.brandGreen, alignItems: 'center', justifyContent: 'center', shadowColor: '#1A2C21', shadowOpacity: 0.2, shadowRadius: 8, shadowOffset: { width: 0, height: 3 }, elevation: 3 },
+  sendBtnDisabled: { backgroundColor: '#B9C6B9' },
   // Chat-hub launcher card (quiz / flashcards ready)
   launcherCard: {
     flexDirection: 'row',

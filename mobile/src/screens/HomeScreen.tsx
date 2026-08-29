@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
-import { View, Text, StyleSheet, TextInput, Pressable, ScrollView, ActivityIndicator, Alert, Modal } from 'react-native';
+import { View, Text, StyleSheet, TextInput, Pressable, ScrollView, ActivityIndicator, Alert, Modal, Platform } from 'react-native';
 import * as DocumentPicker from 'expo-document-picker';
 import { colors, typography } from '../theme';
 import { Header } from '../components/Header';
@@ -17,7 +17,6 @@ interface HomeScreenProps {
   onOpenMenu: () => void;
   onOpenProfile: () => void;
   onSelectPrompt: (prompt: string) => void;
-  onOpenContinueSubject: () => void;
   onSelectSubject: (subject: SubjectItem) => void;
   onOpenQuizResult: (attempt: QuizAttempt) => void;
   // Smart study box (Slice 4): hand off to grounded chat in a matched subject.
@@ -158,7 +157,6 @@ export function HomeScreen({
   onOpenMenu,
   onOpenProfile,
   onSelectPrompt,
-  onOpenContinueSubject,
   onSelectSubject,
   onOpenQuizResult,
   onOpenChatWithSubject,
@@ -208,6 +206,23 @@ export function HomeScreen({
   useEffect(() => {
     loadSubjects();
   }, []);
+
+  // The upload "Choose Subject" / target modals only close via their ✕ (and
+  // Android hardware back). On web there's no hardware back, so listen for Esc so
+  // the subpicker always has a keyboard escape (the ▾ menu is for acting on a
+  // subject, never for leaving — that's Back's job).
+  useEffect(() => {
+    if (Platform.OS !== 'web') return;
+    if (!showSubjectPickerModal && !showUploadTargetModal) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setShowSubjectPickerModal(false);
+        setShowUploadTargetModal(false);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [showSubjectPickerModal, showUploadTargetModal]);
 
   const loadSubjects = async () => {
     setIsLoading(true);
@@ -755,11 +770,11 @@ export function HomeScreen({
           <View style={styles.quickPillsWrapper}>
             <QuickActionPill
               label="Summarize my notes"
-              onPress={() => onSelectPrompt('Summarize my notes')}
+              onPress={() => submitPromptText('Summarize my notes')}
             />
             <QuickActionPill
               label="Quiz me on my materials"
-              onPress={() => onSelectPrompt('Quiz me on my materials')}
+              onPress={() => submitPromptText('Quiz me on my materials')}
             />
           </View>
         </View>

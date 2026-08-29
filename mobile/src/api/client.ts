@@ -242,10 +242,14 @@ export interface ChatResponseAPI {
   provider: string;
 }
 
-export const sendChatMessage = (message: string, subjectId?: number) =>
+export const sendChatMessage = (message: string, subjectId?: number, materialIds?: number[]) =>
   apiRequest<ChatResponseAPI>('/api/chat', {
     method: 'POST',
-    body: JSON.stringify({ message, subject_id: subjectId ?? null }),
+    body: JSON.stringify({
+      message,
+      subject_id: subjectId ?? null,
+      material_ids: materialIds && materialIds.length > 0 ? materialIds : null,
+    }),
   });
 
 export const getChatHistory = (subjectId: number) =>
@@ -259,6 +263,10 @@ export const getChatHistory = (subjectId: number) =>
 export interface SummaryAPI {
   title: string;
   subtitle: string;
+  // One-sentence takeaway + short elaboration for the AIArtifactCard lead/body.
+  // Optional so older cached summaries (without these fields) still render.
+  lead?: string;
+  body?: string;
   overview_paragraphs: string[];
   key_terms: { term: string; explanation: string }[];
   takeaways: string[];
@@ -269,6 +277,44 @@ export const generateSummary = (subjectId: number, materialId?: number, chapterT
     method: 'POST',
     body: JSON.stringify({ material_id: materialId ?? null, chapter_title: chapterTitle ?? null }),
   });
+
+// ---------------------------------------------------------------------------
+// AI study suggestion (mastery-insight driven; rendered under the Insights panel)
+// ---------------------------------------------------------------------------
+export interface StudySuggestionAPI {
+  assessed: boolean;
+  overall?: number | null;
+  suggestion?: {
+    headline: string;
+    items: { topic: string; advice: string }[];
+  } | null;
+}
+
+export const getStudySuggestion = (subjectId: number) =>
+  apiRequest<StudySuggestionAPI>(`/api/subjects/${subjectId}/study-suggestion`, {
+    method: 'POST',
+    body: JSON.stringify({}),
+  });
+
+// ---------------------------------------------------------------------------
+// Study artifacts (persist AI-generated summaries/quizzes/flashcards)
+// ---------------------------------------------------------------------------
+export interface SaveArtifactInput {
+  type: 'summary' | 'quiz' | 'flashcards';
+  lead: string;
+  body: string;
+  details?: Record<string, unknown>;
+  sourceChunks?: number[];
+}
+
+export const saveArtifact = (subjectId: number, input: SaveArtifactInput) =>
+  apiRequest<{ id: number; subject_id: number; type: string; lead: string; body: string; created_at: string }>(
+    `/api/subjects/${subjectId}/artifacts`,
+    {
+      method: 'POST',
+      body: JSON.stringify(input),
+    }
+  );
 
 // ---------------------------------------------------------------------------
 // Quiz

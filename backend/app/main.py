@@ -45,6 +45,7 @@ from .database import (
     QuizAttempt,
     QuizQuestion,
     Subject,
+    StudyArtifact,
     TextChunk,
     find_material_by_hash,
     get_db,
@@ -685,6 +686,7 @@ async def delete_material(material_id: int, db: AsyncSession = Depends(get_db)):
 class ChatRequest(BaseModel):
     message: str = Field(min_length=1, max_length=2000)
     subject_id: Optional[int] = None
+    material_ids: Optional[List[int]] = None
 
 
 class ChatResponse(BaseModel):
@@ -705,11 +707,14 @@ async def rag_chat(body: ChatRequest, db: AsyncSession = Depends(get_db)):
     # Load all chunks for this subject from DB as fallback
     fallback_chunks = []
     if body.subject_id:
-        db_chunks_res = await db.execute(
+        q = (
             select(TextChunk.content)
             .join(Material, TextChunk.material_id == Material.id)
             .where(Material.subject_id == body.subject_id)
         )
+        if body.material_ids:
+            q = q.where(TextChunk.material_id.in_(body.material_ids))
+        db_chunks_res = await db.execute(q)
         fallback_chunks = [c[0] for c in db_chunks_res.all()]
     else:
         db_chunks_res = await db.execute(select(TextChunk.content))
@@ -719,6 +724,7 @@ async def rag_chat(body: ChatRequest, db: AsyncSession = Depends(get_db)):
     chunks = retrieve_relevant_chunks(
         query=body.message,
         subject_id=body.subject_id,
+        material_ids=body.material_ids,
         n_results=5,
         fallback_chunks=fallback_chunks,
     )
@@ -791,11 +797,20 @@ async def generate_summary(
             raise HTTPException(status_code=404, detail="Material not found.")
         text = mat.extracted_text or ""
     else:
-        # Combine all chunks for this subject
+        # Load all chunks for this subject from DB as a fallback (parity with the
+        # chat endpoint) so the summary still has material even if ChromaDB
+        # returns nothing for the subject-name query.
+        db_chunks_res = await db.execute(
+            select(TextChunk.content)
+            .join(Material, TextChunk.material_id == Material.id)
+            .where(Material.subject_id == subject_id)
+        )
+        fallback_chunks = [c[0] for c in db_chunks_res.all()]
         chunks = retrieve_relevant_chunks(
             query=body.chapter_title or subject.name,
             subject_id=subject_id,
             n_results=10,
+            fallback_chunks=fallback_chunks,
         )
         text = "\n\n".join(chunks)
 
@@ -804,7 +819,161 @@ async def generate_summary(
         subject_name=subject.name,
         chapter_title=body.chapter_title,
     )
+    # Surface AI rate-limit / outage as a clear error instead of a silent
+    # "Summary unavailable." card. The mobile client's catch handler shows a
+    # friendly bubble, so the user knows it's a quota issue and not a dead feature.
+    if ai_service.last_error_is_quota:
+        raise HTTPException(
+            status_code=503,
+            detail="The AI request limit has been reached for today. "
+            "The free-tier quota resets daily — try again tomorrow.",
+        )
     return summary
+
+
+class StudySuggestionResponse(BaseModel):
+    """AI study suggestion derived from the subject's mastery insight.
+
+    `assessed` is False when the subject has no quiz attempts yet (nothing to
+    base a suggestion on). `suggestion` is the {headline, items} JSON, or null
+    on transient AI failure.
+    """
+    assessed: bool
+    overall: Optional[float] = None
+    suggestion: Optional[dict] = None
+
+
+@app.post("/api/subjects/{subject_id}/study-suggestion", response_model=StudySuggestionResponse)
+async def study_suggestion(
+    subject_id: int,
+    db: AsyncSession = Depends(get_db),
+):
+    """AI study suggestion anchored on the subject's focus areas (weak topics).
+
+    Driven purely by the mastery insight — no source retrieval — so it works
+    with zero uploaded notes. The mobile client caches the result against a
+    mastery signature and only calls this when mastery changes (the user's
+    'every mastery level change' rule), keeping AI spend to a minimum.
+    """
+    subject = await db.get(Subject, subject_id)
+    if not subject:
+        raise HTTPException(status_code=404, detail="Subject not found.")
+
+    mastery = await get_or_compute_mastery(subject_id, db)
+    if not mastery or not mastery.get("assessed"):
+        return StudySuggestionResponse(assessed=False)
+
+    by_topic = mastery["by_topic"] or {}
+    overall_pct = round((mastery["overall"] or 0) * 100)
+    # Weakest topics first — these ARE the focus areas and the AI's suggestions.
+    focus = sorted(by_topic.items(), key=lambda kv: kv[1])
+    focus_areas = [{"topic": t, "mastery": round(m * 100)} for t, m in focus]
+
+    suggestion = await ai_service.generate_study_suggestion(
+        subject_name=subject.name,
+        overall_pct=overall_pct,
+        focus_areas=focus_areas,
+    )
+    # Same quota surfacing as the summary endpoint: a dead quota shows a friendly
+    # state on the client, not a broken card.
+    if ai_service.last_error_is_quota:
+        raise HTTPException(
+            status_code=503,
+            detail="The AI request limit has been reached for today. "
+            "The free-tier quota resets daily — try again tomorrow.",
+        )
+    return StudySuggestionResponse(
+        assessed=True,
+        overall=overall_pct,
+        suggestion=suggestion,
+    )
+
+
+# ===========================================================================
+# STUDY ARTIFACTS (saved summaries / quizzes / flashcards — "Save to notes")
+# ===========================================================================
+
+class ArtifactCreate(BaseModel):
+    type: str  # summary | quiz | flashcards
+    lead: str
+    body: str
+    details: Optional[dict] = None  # structured payload (key terms, questions, cards)
+    source_chunks: Optional[list] = None
+
+
+class ArtifactResponse(BaseModel):
+    id: int
+    subject_id: int
+    type: str
+    lead: str
+    body: str
+    created_at: str
+
+
+@app.post("/api/subjects/{subject_id}/artifacts", response_model=ArtifactResponse)
+async def save_artifact(
+    subject_id: int,
+    body: ArtifactCreate,
+    db: AsyncSession = Depends(get_db),
+):
+    """Persist an AI-generated study artifact so it survives app restart.
+
+    Called when the student taps "Save to notes" on an AIArtifactCard in the
+    mobile chat. The structured `details` payload is stored as JSON.
+    """
+    subject = await db.get(Subject, subject_id)
+    if not subject:
+        raise HTTPException(status_code=404, detail="Subject not found.")
+
+    import json as _json
+    artifact = StudyArtifact(
+        subject_id=subject_id,
+        type=body.type,
+        lead=body.lead,
+        body=body.body,
+        details_json=_json.dumps(body.details) if body.details is not None else None,
+        source_chunks=_json.dumps(body.source_chunks) if body.source_chunks else None,
+    )
+    db.add(artifact)
+    await db.commit()
+    await db.refresh(artifact)
+    return ArtifactResponse(
+        id=artifact.id,
+        subject_id=artifact.subject_id,
+        type=artifact.type,
+        lead=artifact.lead,
+        body=artifact.body,
+        created_at=artifact.created_at.isoformat() if artifact.created_at else "",
+    )
+
+
+@app.get("/api/subjects/{subject_id}/artifacts", response_model=list[ArtifactResponse])
+async def list_artifacts(
+    subject_id: int,
+    db: AsyncSession = Depends(get_db),
+):
+    """List saved study artifacts for a subject (most recent first)."""
+    subject = await db.get(Subject, subject_id)
+    if not subject:
+        raise HTTPException(status_code=404, detail="Subject not found.")
+
+    res = await db.execute(
+        select(StudyArtifact)
+        .where(StudyArtifact.subject_id == subject_id)
+        .order_by(StudyArtifact.created_at.desc())
+    )
+    rows = res.scalars().all()
+    return [
+        ArtifactResponse(
+            id=a.id,
+            subject_id=a.subject_id,
+            type=a.type,
+            lead=a.lead,
+            body=a.body,
+            created_at=a.created_at.isoformat() if a.created_at else "",
+        )
+        for a in rows
+    ]
 
 
 # ===========================================================================

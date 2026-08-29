@@ -1,20 +1,23 @@
 import React from 'react';
-import { View, Text, StyleSheet, Image, Pressable, ScrollView } from 'react-native';
+import { View, Text, StyleSheet, Image, Pressable, ScrollView, Alert } from 'react-native';
 import { colors, typography } from '../theme';
 import { Header } from '../components/Header';
 import { SettingsIcon, ShieldIcon, ChevronRightIcon } from '../components/Icons';
 
 interface ProfileScreenProps {
   onOpenMenu: () => void;
-  onOpenAISettings?: () => void;
 }
 
 const PROFILE_AVATAR = 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=300&q=80';
 
-export function ProfileScreen({ onOpenMenu, onOpenAISettings }: ProfileScreenProps) {
+export function ProfileScreen({ onOpenMenu }: ProfileScreenProps) {
   return (
     <View style={styles.container}>
-      <Header onMenu={onOpenMenu} />
+      {/* The header's avatar tap is a no-op here (we're already on Profile) —
+          pass an onProfile that does nothing rather than leaving it undefined
+          so the control stays honest: it looks tappable because it is the
+          profile context itself. */}
+      <Header onMenu={onOpenMenu} onProfile={() => {}} />
 
       <ScrollView
         contentContainerStyle={styles.scrollContent}
@@ -33,10 +36,12 @@ export function ProfileScreen({ onOpenMenu, onOpenAISettings }: ProfileScreenPro
         <View style={styles.section}>
           <Text style={styles.sectionOverline}>INTELLIGENCE &amp; PRIVACY</Text>
 
-          {/* AI Settings Row */}
+          {/* AI Settings Row — honest about there being no settings screen yet
+              (BYOK auth is a pending backlog item). A tap that does nothing is
+              worse than a clear "coming soon". */}
           <Pressable
             accessibilityLabel="AI Settings"
-            onPress={onOpenAISettings}
+            onPress={() => Alert.alert('AI Settings', 'Personal AI settings (bring your own OpenRouter key) are coming soon.')}
             style={({ pressed }) => [styles.settingsRow, pressed && styles.rowPressed]}
           >
             <View style={styles.settingsLeft}>

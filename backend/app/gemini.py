@@ -224,7 +224,9 @@ Answer concisely and clearly, grounded strictly in the above materials:"""
     ) -> dict:
         """
         Generates a structured summary from raw material text.
-        Returns: {title, subtitle, overview_paragraphs, key_terms, takeaways}
+        Returns: {title, subtitle, lead, body, overview_paragraphs, key_terms, takeaways}
+        `lead`/`body` are the one-sentence takeaway + short elaboration used by
+        the mobile AIArtifactCard (so the card never has to truncate text).
         The subtitle is the concise MAIN IDEA — specific and content-rich so the
         student instantly grasps what the material is about.
         """
@@ -242,6 +244,8 @@ Write a JSON study summary with these exact fields:
 {{
   "title": "<concise chapter/section title>",
   "subtitle": "<ONE informative sentence stating the MAIN IDEA of the material — what it is fundamentally about and the single most important takeaway. Be specific and concrete, naming the actual topics/concepts. NEVER write generic phrases like 'Summary of ...' or 'An overview of ...'. GOOD example: 'This material explains how ETL pipelines extract, transform, and load data while applying validation rules that catch quality issues before they reach the warehouse.' BAD example: 'Summary of ETL Processes material'.",
+  "lead": "<ONE sentence — the single most important takeaway a student should remember. Distinct from subtitle: this is the punchy one-liner, not the full main-idea sentence.>",
+  "body": "<2-3 plain-language sentences elaborating the lead — what the material covers and why it matters. Skimmable in ~10 seconds.>",
   "overview_paragraphs": ["<paragraph 1 explaining the core concepts in plain language>", "<paragraph 2 with the next key idea>"],
   "key_terms": [
     {{"term": "<term>", "explanation": "<brief, clear definition>"}},
@@ -277,15 +281,110 @@ Return ONLY valid JSON, no markdown fences."""
                 paras = result.get("overview_paragraphs") or []
                 subtitle = paras[0].strip() if paras else f"Core concepts from {subject_name}."
             result["subtitle"] = subtitle
+
+            # Guarantee the artifact-card lead/body fields so the mobile
+            # AIArtifactCard always has a one-liner + elaboration even if the
+            # model omits them. Derive from subtitle / overview as a fallback
+            # rather than truncating the first sentence client-side (that
+            # produces awkward cutoffs).
+            if not (result.get("lead") or "").strip():
+                result["lead"] = subtitle
+            if not (result.get("body") or "").strip():
+                paras = result.get("overview_paragraphs") or []
+                result["body"] = " ".join(paras).strip() or f"Core concepts from {subject_name}."
             return result
         except Exception as e:
             logger.warning(f"Summary JSON parse failed: {e}")
             return {
                 "title": chapter_title or subject_name or "Study Summary",
                 "subtitle": f"Core concepts and key ideas covered in {subject_name}.",
+                "lead": f"Core concepts and key ideas covered in {subject_name}.",
+                "body": (raw or "Summary unavailable."),
                 "overview_paragraphs": [raw] if raw else ["Summary unavailable."],
                 "key_terms": [],
                 "takeaways": [],
+            }
+
+    async def generate_study_suggestion(
+        self,
+        subject_name: str,
+        overall_pct: float,
+        focus_areas: List[dict],
+    ) -> dict:
+        """Generate a short, personalized AI study suggestion from the mastery
+        insight (overall % + weak topics). Returns
+        {"headline": str, "items": [{"topic": str, "advice": str}]}.
+
+        Mastery-driven only (no source retrieval) so it works with zero uploaded
+        notes and stays cheap on the daily quota.
+        """
+        if not focus_areas:
+            # Nothing weak to target — a reassuring note instead of an empty card.
+            return {
+                "headline": f"Looking strong across {subject_name} — keep quizzing to stay sharp.",
+                "items": [],
+            }
+        focus_text = "\n".join(
+            f"- {fa['topic']}: {fa['mastery']}% mastery" for fa in focus_areas
+        )
+        prompt = f"""You are StudyMate AI acting as a personal study coach.
+
+Subject: {subject_name}
+Overall mastery: {overall_pct}%
+Weakest topics (lowest mastery first):
+{focus_text}
+
+Write a SHORT, actionable study suggestion to help the student MASTER the weak
+topics above. Be specific and concrete — name the topic and a concrete next
+action (retake a quiz, drill flashcards, re-read, practice problems). Never be
+generic. Output strict JSON:
+{{
+  "headline": "<one sentence: the single most important thing to do next>",
+  "items": [
+    {{"topic": "<topic name from the list>", "advice": "<one concrete sentence of what to do>"}},
+    ... (one item per weak topic, weakest first)
+  ]
+}}
+
+Return ONLY valid JSON, no markdown fences."""
+
+        raw = await self._generate(prompt)
+        try:
+            cleaned = raw.strip()
+            if cleaned.startswith("```"):
+                cleaned = cleaned.split("\n", 1)[1] if "\n" in cleaned else cleaned[3:]
+            if cleaned.endswith("```"):
+                cleaned = cleaned[:-3]
+            cleaned = cleaned.strip()
+            start = cleaned.find("{")
+            end = cleaned.rfind("}")
+            if start != -1 and end != -1 and end > start:
+                cleaned = cleaned[start : end + 1]
+            result = json.loads(cleaned)
+            clean_items = []
+            for it in (result.get("items") or []):
+                if isinstance(it, dict) and it.get("topic") and it.get("advice"):
+                    clean_items.append(
+                        {"topic": str(it["topic"]), "advice": str(it["advice"])}
+                    )
+            return {
+                "headline": str(result.get("headline") or "").strip()
+                or f"Focus on your weakest topics in {subject_name} to lift mastery.",
+                "items": clean_items,
+            }
+        except Exception as e:
+            logger.warning(f"Study suggestion JSON parse failed: {e}")
+            # Graceful fallback so the card is never empty even if AI output is
+            # unusable: turn the weak topics into plain concrete advice.
+            return {
+                "headline": f"Your weakest areas are holding back {subject_name} — target them next.",
+                "items": [
+                    {
+                        "topic": fa["topic"],
+                        "advice": f"Retake a quiz on {fa['topic']} and drill a few flashcards to push past {fa['mastery']}%.",
+                    }
+                    for fa in focus_areas[:3]
+                ],
             }
 
     # ------------------------------------------------------------------
