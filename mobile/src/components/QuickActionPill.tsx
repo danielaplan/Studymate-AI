@@ -60,7 +60,7 @@ const styles = StyleSheet.create({
     backgroundColor: 'transparent',
   },
   filled: {
-    backgroundColor: '#1E221D',
+    backgroundColor: colors.inkButton,
   },
   text: {
     fontFamily: typography.sansRegular,
@@ -70,7 +70,7 @@ const styles = StyleSheet.create({
     color: colors.textPrimary,
   },
   filledText: {
-    color: '#FFFFFF',
+    color: colors.surface,
     fontFamily: typography.sansMedium,
   },
   pressed: {

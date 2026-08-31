@@ -21,6 +21,10 @@ interface HomeScreenProps {
   onOpenQuizResult: (attempt: QuizAttempt) => void;
   // Smart study box (Slice 4): hand off to grounded chat in a matched subject.
   onOpenChatWithSubject?: (subject: SubjectItem, prompt: string) => void;
+  // Optional direct-to-quiz deep link. When provided by the router, the pulse's
+  // "Study {subject}" action jumps straight into that subject's quiz; otherwise it
+  // safely falls back to onSelectSubject (open the subject workspace).
+  onStartQuiz?: (subject: SubjectItem) => void;
   // Guided create-subject thread (Slice 4 remainder). Durable capture state is
   // lifted to App (guard M1) so in-progress answers survive Home unmounting.
   guided?: GuidedCapture | null;
@@ -29,8 +33,11 @@ interface HomeScreenProps {
 
 function quizBand(pct: number): string {
   if (pct >= 80) return colors.brandGreen;
-  if (pct >= 50) return '#E2A23B';
-  return '#D9694E';
+  // Route the mid/low bands through the canonical status tokens (§17 retired
+  // these exact bright hex from QuizOverview). Keeps the study-pulse quiet and
+  // consistent with the rest of the system instead of a louder custom red/amber.
+  if (pct >= 50) return colors.warning;
+  return colors.error;
 }
 
 function masteryLabel(mastery: number | null): string {
@@ -94,19 +101,22 @@ function composeGuidedPrompt(c: GuidedCapture): string {
   }
 }
 
-// Picks a single study recommendation from the loaded subjects, using only the
-// data HomeScreen already has (overall mastery per subject — no extra fetches).
-// Priority: (1) an unassessed subject -> nudge to take a first quiz,
-// (2) the weakest assessed subject below a threshold -> focus there,
-// (3) everything assessed and healthy -> encouragement,
-// (4) no subjects at all -> neutral prompt. Returns a headline string.
-function buildRecommendation(items: SubjectItem[]): string {
+// Derives the study-pulse: a single headline plus the subject the student should
+// act on next (if any). Uses only data HomeScreen already has (overall mastery per
+// subject — no extra fetches). Priority: (1) unassessed subject -> first quiz,
+// (2) weakest assessed subject below threshold -> focus there, (3) all healthy ->
+// encouragement, (4) no subjects -> neutral prompt.
+interface PulseResult {
+  headline: string;
+  focus: SubjectItem | null;
+}
+function buildPulse(items: SubjectItem[]): PulseResult {
   if (items.length === 0) {
-    return 'Add a subject and take a quiz to see your study pulse.';
+    return { headline: 'Add a subject and take a quiz to see your study pulse.', focus: null };
   }
   const unassessed = items.find((s) => s.mastery == null);
   if (unassessed) {
-    return `Take your first quiz in ${unassessed.name} to measure mastery.`;
+    return { headline: `Take your first quiz in ${unassessed.name} to measure mastery.`, focus: unassessed };
   }
   const assessed = items.filter((s) => s.mastery != null) as Array<SubjectItem & { mastery: number }>;
   const weakest = assessed.reduce(
@@ -114,10 +124,17 @@ function buildRecommendation(items: SubjectItem[]): string {
     assessed[0]
   );
   if (weakest.mastery < 60) {
-    return `Focus on ${weakest.name} — your weakest subject (${weakest.mastery}%).`;
+    return { headline: `Focus on ${weakest.name} — your weakest subject (${weakest.mastery}%).`, focus: weakest };
   }
   const avg = Math.round(assessed.reduce((sum, s) => sum + (s.mastery as number), 0) / assessed.length);
-  return `Strong progress — ${avg}% average mastery across ${assessed.length} subjects.`;
+  return { headline: `Strong progress — ${avg}% average mastery across ${assessed.length} subjects.`, focus: null };
+}
+
+// Local-day key (YYYY-MM-DD) so activity buckets by the user's calendar day, not UTC.
+function localDayKey(iso: string): string {
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return '';
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
 // Fallback subject pick when the global source-match finds no confident match
@@ -160,6 +177,7 @@ export function HomeScreen({
   onSelectSubject,
   onOpenQuizResult,
   onOpenChatWithSubject,
+  onStartQuiz,
   guided,
   onGuidedChange,
 }: HomeScreenProps) {
@@ -645,8 +663,54 @@ export function HomeScreen({
   const showLoadError = subjectsLoadFailed && subjects.length === 0;
   const isInitialLoading = isLoading && subjects.length === 0 && !subjectsLoadFailed;
 
-  // Personalized study-pulse headline derived from the loaded subjects.
-  const recommendation = useMemo(() => buildRecommendation(subjects), [subjects]);
+  // Personalized study-pulse: headline + focus subject, derived from loaded subjects.
+  const pulse = useMemo(() => buildPulse(subjects), [subjects]);
+
+  // 14-day activity heatmap from quiz history (bucketed by local day; cell tinted
+  // by that day's average score via the shared quiz-band tokens).
+  const heatmap = useMemo(() => {
+    const today = new Date();
+    const days: Array<{ date: string; pct: number | null }> = [];
+    for (let i = 13; i >= 0; i--) {
+      const d = new Date(today);
+      d.setDate(today.getDate() - i);
+      const key = localDayKey(d.toISOString());
+      const dayAttempts = visibleHistory.filter((a) => localDayKey(a.createdAt) === key);
+      const pct = dayAttempts.length
+        ? Math.round(dayAttempts.reduce((sum, a) => sum + a.pct, 0) / dayAttempts.length)
+        : null;
+      days.push({ date: key, pct });
+    }
+    return days;
+  }, [visibleHistory]);
+
+  // Current streak: consecutive active days ending today (an empty today doesn't
+  // break the streak — it just hasn't happened yet).
+  const streak = useMemo(() => {
+    const active = heatmap.map((h) => h.pct != null);
+    let end = active.length - 1;
+    if (end >= 0 && !active[end]) end -= 1;
+    let count = 0;
+    for (let i = end; i >= 0; i--) {
+      if (active[i]) count += 1;
+      else break;
+    }
+    return count;
+  }, [heatmap]);
+
+  // Trend: last-3 attempts vs prior-3 (history is newest-first).
+  const trend = useMemo<'up' | 'down' | 'flat'>(() => {
+    if (visibleHistory.length < 6) return 'flat';
+    const avg = (slice: QuizAttempt[]) => slice.reduce((s, a) => s + a.pct, 0) / slice.length;
+    const last3 = avg(visibleHistory.slice(0, 3));
+    const prev3 = avg(visibleHistory.slice(3, 6));
+    if (last3 - prev3 >= 5) return 'up';
+    if (prev3 - last3 >= 5) return 'down';
+    return 'flat';
+  }, [visibleHistory]);
+
+  // Local alias so TypeScript narrows the focus subject inside the JSX branch.
+  const focus = pulse.focus;
 
   return (
     <View style={styles.container}>
@@ -750,7 +814,42 @@ export function HomeScreen({
                 {visibleHistory.length > 0 ? `Last ${visibleHistory[0].pct}%` : 'No quizzes yet'}
               </Text>
             </View>
-            <Text style={styles.summaryHeadline}>{recommendation}</Text>
+
+            {/* 14-day activity heatmap — at-a-glance rhythm signal. */}
+            <View
+              style={styles.heatmapRow}
+              accessibilityLabel={`Study activity, last 14 days${streak > 0 ? `, ${streak}-day streak` : ''}`}
+            >
+              {heatmap.map((h) => (
+                <View
+                  key={h.date}
+                  style={[styles.heatCell, { backgroundColor: h.pct == null ? colors.borderLight : quizBand(h.pct) }]}
+                />
+              ))}
+            </View>
+
+            <Text style={styles.summaryHeadline}>{pulse.headline}</Text>
+
+            {/* One-tap action loop: jump to the focus subject (quiz when wired,
+                otherwise the subject workspace). No new routing required. */}
+            {focus && (
+              <Pressable
+                accessibilityLabel={`Study ${focus.name}`}
+                onPress={() => (onStartQuiz ? onStartQuiz(focus) : onSelectSubject(focus))}
+                style={({ pressed }) => [styles.pulseAction, pressed && styles.pulseActionPressed]}
+              >
+                <Text style={styles.pulseActionText}>Study {focus.name}</Text>
+              </Pressable>
+            )}
+
+            {/* Streak + trend — momentum, not just counts. */}
+            <View style={styles.pulseMetaRow}>
+              <Text style={styles.pulseMetaText}>{streak > 0 ? `${streak}-day streak` : 'No streak yet'}</Text>
+              <Text style={styles.pulseMetaText}>
+                {trend === 'up' ? 'Rising' : trend === 'down' ? 'Needs review' : 'Steady'}
+              </Text>
+            </View>
+
             <View style={styles.summaryMetrics}>
               <View style={styles.metricPill}>
                 <Text style={styles.metricValue}>{totalNotes}</Text>
@@ -1118,7 +1217,7 @@ const styles = StyleSheet.create({
     borderRadius: 20,
     paddingHorizontal: 14,
     paddingVertical: 12,
-    shadowColor: '#000000',
+    shadowColor: colors.ink,
     shadowOpacity: 0.04,
     shadowRadius: 12,
     shadowOffset: { width: 0, height: 6 },
@@ -1162,7 +1261,7 @@ const styles = StyleSheet.create({
     borderRadius: 22,
     borderWidth: 1,
     borderColor: colors.borderLight,
-    shadowColor: '#000000',
+    shadowColor: colors.ink,
     shadowOpacity: 0.03,
     shadowRadius: 10,
     shadowOffset: { width: 0, height: 4 },
@@ -1207,7 +1306,7 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
     paddingHorizontal: 10,
     borderRadius: 14,
-    backgroundColor: '#FFFFFF',
+    backgroundColor: colors.surface,
     borderWidth: 1,
     borderColor: colors.borderLight,
     alignItems: 'center',
@@ -1221,6 +1320,43 @@ const styles = StyleSheet.create({
     marginTop: 4,
     fontFamily: typography.sansRegular,
     fontSize: 11,
+    color: colors.textMuted,
+  },
+  heatmapRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 4,
+    marginTop: 12,
+  },
+  heatCell: {
+    width: 18,
+    height: 18,
+    borderRadius: 5,
+  },
+  pulseAction: {
+    marginTop: 12,
+    minHeight: 44,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 14,
+    backgroundColor: colors.brandGreen,
+    paddingHorizontal: 16,
+  },
+  pulseActionPressed: { opacity: 0.85 },
+  pulseActionText: {
+    fontFamily: typography.sansSemiBold,
+    fontSize: 14,
+    color: colors.surface,
+  },
+  pulseMetaRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginTop: 12,
+  },
+  pulseMetaText: {
+    fontFamily: typography.sansMedium,
+    fontSize: 12,
     color: colors.textMuted,
   },
   quickPillsWrapper: {
@@ -1251,13 +1387,13 @@ const styles = StyleSheet.create({
   continueCard: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#FFFFFF',
+    backgroundColor: colors.surface,
     borderWidth: 1,
     borderColor: colors.borderLight,
     borderRadius: 22,
     padding: 16,
     gap: 16,
-    shadowColor: '#000000',
+    shadowColor: colors.ink,
     shadowOpacity: 0.04,
     shadowRadius: 12,
     shadowOffset: { width: 0, height: 6 },
@@ -1289,7 +1425,7 @@ const styles = StyleSheet.create({
   emptyStateCard: {
     paddingVertical: 30,
     paddingHorizontal: 24,
-    backgroundColor: '#FFFFFF',
+    backgroundColor: colors.surface,
     borderRadius: 18,
     borderWidth: 1,
     borderColor: colors.borderMedium,
@@ -1324,7 +1460,7 @@ const styles = StyleSheet.create({
   errorCard: {
     paddingVertical: 28,
     paddingHorizontal: 22,
-    backgroundColor: '#FFFFFF',
+    backgroundColor: colors.surface,
     borderRadius: 18,
     borderWidth: 1,
     borderColor: colors.borderLight,
@@ -1361,15 +1497,15 @@ const styles = StyleSheet.create({
   retryPillText: {
     fontFamily: typography.sansSemiBold,
     fontSize: 14,
-    color: '#FFFFFF',
+    color: colors.surface,
   },
   subjectsList: {
-    backgroundColor: '#FFFFFF',
+    backgroundColor: colors.surface,
     borderRadius: 18,
     borderWidth: 1,
     borderColor: colors.borderLight,
     paddingHorizontal: 16,
-    shadowColor: '#000000',
+    shadowColor: colors.ink,
     shadowOpacity: 0.03,
     shadowRadius: 10,
     shadowOffset: { width: 0, height: 4 },
@@ -1393,12 +1529,12 @@ const styles = StyleSheet.create({
     marginTop: 8,
   },
   quizHistoryList: {
-    backgroundColor: '#FFFFFF',
+    backgroundColor: colors.surface,
     borderRadius: 18,
     borderWidth: 1,
     borderColor: colors.borderLight,
     paddingHorizontal: 16,
-    shadowColor: '#000000',
+    shadowColor: colors.ink,
     shadowOpacity: 0.03,
     shadowRadius: 10,
     shadowOffset: { width: 0, height: 4 },
@@ -1465,7 +1601,7 @@ const styles = StyleSheet.create({
   modalContent: {
     width: '100%',
     maxWidth: 400,
-    backgroundColor: '#FFFFFF',
+    backgroundColor: colors.surface,
     borderRadius: 16,
     padding: 20,
     gap: 12,
@@ -1520,9 +1656,9 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    backgroundColor: '#FDECEC',
+    backgroundColor: colors.errorSoft,
     borderWidth: 1,
-    borderColor: '#F3C9C9',
+    borderColor: colors.errorBorder,
     borderRadius: 14,
     paddingVertical: 14,
     paddingHorizontal: 16,
@@ -1545,7 +1681,7 @@ const styles = StyleSheet.create({
   retryBtnText: {
     fontFamily: typography.sansMedium,
     fontSize: 13,
-    color: '#FFFFFF',
+    color: colors.surface,
   },
   viewAllRow: {
     flexDirection: 'row',
@@ -1561,7 +1697,7 @@ const styles = StyleSheet.create({
     color: colors.brandGreen,
   },
   skeletonList: {
-    backgroundColor: '#FFFFFF',
+    backgroundColor: colors.surface,
     borderRadius: 18,
     borderWidth: 1,
     borderColor: colors.borderLight,

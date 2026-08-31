@@ -70,7 +70,7 @@ const styles = StyleSheet.create({
     borderTopColor: colors.line,
     borderTopLeftRadius: 22,
     borderTopRightRadius: 22,
-    shadowColor: '#000000',
+    shadowColor: colors.ink,
     shadowOpacity: 0.06,
     shadowRadius: 12,
     shadowOffset: { width: 0, height: -4 },

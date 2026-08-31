@@ -98,7 +98,7 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     borderWidth: 1,
     borderColor: colors.borderLight,
-    backgroundColor: '#FFFFFF',
+    backgroundColor: colors.surface,
   },
   menuBtnPressed: { backgroundColor: colors.surfaceMuted },
   tile: {
@@ -108,7 +108,7 @@ const styles = StyleSheet.create({
     marginTop: 10,
     paddingHorizontal: 14,
     paddingVertical: 12,
-    backgroundColor: '#FFFFFF',
+    backgroundColor: colors.surface,
     borderWidth: 1,
     borderColor: colors.borderLight,
     borderRadius: 14,

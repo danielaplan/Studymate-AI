@@ -6,6 +6,7 @@ import {
   TextInput,
   Pressable,
   ScrollView,
+  FlatList,
   ActivityIndicator,
   KeyboardAvoidingView,
   Platform,
@@ -16,7 +17,7 @@ import { colors, typography } from '../theme';
 import { Header } from '../components/Header';
 import { ScreenContextBar } from '../components/ScreenContextBar';
 import { ChatContextMenu } from '../components/ChatContextMenu';
-import { FolderIcon, SparklesIcon, PaperclipIcon, MicIcon, SendIcon, ChevronRightIcon, DocumentIcon, QuizIcon, FlashcardIcon, ChatNavIcon } from '../components/Icons';
+import { FolderIcon, SparklesIcon, PaperclipIcon, SendIcon, ChevronRightIcon, DocumentIcon, QuizIcon, FlashcardIcon, ChatNavIcon } from '../components/Icons';
 import { AIArtifactCard } from '../components/AIArtifactCard';
 import { ChatMessage, ChatAction, ChatSetupQuestion, SubjectItem, ArtifactPayload } from '../types';
 import { sendChatMessage, uploadMaterial, createSubject, generateSummary, generateQuiz, generateFlashcards, saveArtifact, listSubjects, SubjectAPI, SummaryAPI } from '../api/client';
@@ -71,6 +72,18 @@ function renderFormattedReply(text: string) {
     .replace(/\n{3,}/g, '\n\n')
     .trim();
 
+  // Humanize the grounding citation: chunk IDs are an internal detail, so surface
+  // them as friendly "Source N" references back to the student's own notes.
+  let sourceRef: string | null = null;
+  if (sourceMatch) {
+    const chunks = sourceMatch[1]
+      .replace(/CHUNK\s+/gi, '')
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean);
+    sourceRef = chunks.length === 1 ? `Source ${chunks[0]}` : `Sources ${chunks.join(', ')}`;
+  }
+
   const renderInline = (line: string) => {
     const parts = line.split(/(\*\*[^*]+\*\*|__[^_]+__|`[^`]+`)/g);
     return parts.map((part, index) => {
@@ -91,9 +104,9 @@ function renderFormattedReply(text: string) {
           {renderInline(line.trim())}
         </Text>
       ))}
-      {sourceMatch && (
+      {sourceRef && (
         <Text style={styles.sourceLabel}>
-          Grounded in your notes · Chunks {sourceMatch[1].replace(/CHUNK\s+/gi, '')}
+          {sourceRef} · from your notes
         </Text>
       )}
     </>
@@ -719,20 +732,29 @@ export function ChatScreen({
     return null;
   };
 
+  // Guards against a double-tap on Send (or rapid keyboard/Enter) firing two
+  // requests before the first round-trip completes.
+  const isSubmittingRef = useRef(false);
   const submitPrompt = async (rawText: string) => {
     const prompt = rawText.trim();
     if (!prompt) return;
+    if (isSubmittingRef.current) return;
+    isSubmittingRef.current = true;
 
-    const userMsg: ChatMessage = {
-      id: Date.now().toString(),
-      sender: 'user',
-      text: prompt,
-      timestamp: 'Just now',
-    };
-    setMessages((prev) => [...prev, userMsg]);
-    persistChat('user', prompt);
-    setInputText('');
-    await routePrompt(prompt);
+    try {
+      const userMsg: ChatMessage = {
+        id: Date.now().toString(),
+        sender: 'user',
+        text: prompt,
+        timestamp: 'Just now',
+      };
+      setMessages((prev) => [...prev, userMsg]);
+      persistChat('user', prompt);
+      setInputText('');
+      await routePrompt(prompt);
+    } finally {
+      isSubmittingRef.current = false;
+    }
   };
 
   const handleSendMessage = () => submitPrompt(inputText);
@@ -816,10 +838,14 @@ export function ChatScreen({
           )}
 
           {!pickerLoading && pickerSubjects && pickerSubjects.length > 0 && (
-            <ScrollView style={styles.pickerList} contentContainerStyle={styles.pickerListContent} showsVerticalScrollIndicator={false}>
-              {pickerSubjects.map((s) => (
+            <FlatList
+              style={styles.pickerList}
+              contentContainerStyle={styles.pickerListContent}
+              showsVerticalScrollIndicator={false}
+              data={pickerSubjects}
+              keyExtractor={(s) => s.id}
+              renderItem={({ item: s }) => (
                 <Pressable
-                  key={s.id}
                   accessibilityLabel={`Chat about ${s.name}`}
                   onPress={() => onSelectSubject?.(s)}
                   style={({ pressed }) => [styles.pickerRow, pressed && styles.pickerRowPressed]}
@@ -835,8 +861,8 @@ export function ChatScreen({
                   </View>
                   <ChevronRightIcon size={18} color={colors.textMuted} />
                 </Pressable>
-              ))}
-            </ScrollView>
+              )}
+            />
           )}
         </View>
       </KeyboardAvoidingView>
@@ -860,36 +886,39 @@ export function ChatScreen({
         />
       )}
 
-      <ScrollView
+      <FlatList
+        style={styles.chatList}
         contentContainerStyle={styles.scrollContent}
         keyboardShouldPersistTaps="handled"
+        keyboardDismissMode="on-drag"
         showsVerticalScrollIndicator={false}
-      >
-        <ScrollView
-          horizontal
-          showsHorizontalScrollIndicator={false}
-          keyboardShouldPersistTaps="handled"
-          contentContainerStyle={styles.promptSuggestions}
-        >
-          {suggestions.map((s) => {
-            const ChipIcon = s.icon;
-            return (
-              <Pressable
-                key={s.label}
-                accessibilityLabel={`Use prompt ${s.label}`}
-                onPress={s.onTap}
-                style={({ pressed }) => [styles.promptChip, pressed && styles.promptChipPressed]}
-              >
-                <ChipIcon size={15} color={colors.artifact.forest} />
-                <Text style={styles.promptChipText}>{s.label}</Text>
-              </Pressable>
-            );
-          })}
-        </ScrollView>
-
-        {/* Message Thread */}
-        <View style={styles.thread}>
-          {messages.map((msg) =>
+        data={messages}
+        keyExtractor={(m) => m.id}
+        ListHeaderComponent={
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            keyboardShouldPersistTaps="handled"
+            contentContainerStyle={styles.promptSuggestions}
+          >
+            {suggestions.map((s) => {
+              const ChipIcon = s.icon;
+              return (
+                <Pressable
+                  key={s.label}
+                  accessibilityLabel={`Use prompt ${s.label}`}
+                  onPress={s.onTap}
+                  style={({ pressed }) => [styles.promptChip, pressed && styles.promptChipPressed]}
+                >
+                  <ChipIcon size={15} color={colors.artifact.forest} />
+                  <Text style={styles.promptChipText}>{s.label}</Text>
+                </Pressable>
+              );
+            })}
+          </ScrollView>
+        }
+        ItemSeparatorComponent={() => <View style={styles.threadGap} />}
+        renderItem={({ item: msg }) =>
             msg.artifactType || msg.action ? (
               <View key={msg.id} style={styles.artifactWrap}>
                 {renderArtifact(msg)}
@@ -1003,35 +1032,37 @@ export function ChatScreen({
                 )}
               </View>
             )
-          )}
-
-          {isUploading && (
-            <View style={styles.loadingIndicator}>
-              <ActivityIndicator color={colors.brandGreen} size="small" />
-              <Text style={styles.loadingText}>Uploading and indexing document chunks...</Text>
-            </View>
-          )}
-
-          {isLoading && pendingArtifact ? (
-            <View style={styles.artifactWrap}>
-              <AIArtifactCard type={pendingArtifact} leadText="" bodyText="" loading />
-            </View>
-          ) : isLoading && (
-            <View style={styles.typingBubble}>
-              <View style={styles.aiHeader}>
-                <SparklesIcon size={16} color={colors.brandGreen} />
-                <Text style={styles.aiLabel}>STUDYMATE AI</Text>
-              </View>
-              <View style={styles.typingRow}>
+        }
+        ListFooterComponent={
+          <View style={styles.chatFooterGap}>
+            {isUploading && (
+              <View style={styles.loadingIndicator}>
                 <ActivityIndicator color={colors.brandGreen} size="small" />
-                <Text style={styles.loadingText}>
-                  {initialSummary ? 'Preparing your summary…' : 'Reading your notes…'}
-                </Text>
+                <Text style={styles.loadingText}>Adding your notes…</Text>
               </View>
-            </View>
-          )}
-        </View>
-      </ScrollView>
+            )}
+
+            {isLoading && pendingArtifact ? (
+              <View style={styles.artifactWrap}>
+                <AIArtifactCard type={pendingArtifact} leadText="" bodyText="" loading />
+              </View>
+            ) : isLoading && (
+              <View style={styles.typingBubble}>
+                <View style={styles.aiHeader}>
+                  <SparklesIcon size={16} color={colors.brandGreen} />
+                  <Text style={styles.aiLabel}>STUDYMATE AI</Text>
+                </View>
+                <View style={styles.typingRow}>
+                  <ActivityIndicator color={colors.brandGreen} size="small" />
+                  <Text style={styles.loadingText}>
+                    {initialSummary ? 'Preparing your summary…' : 'Reading your notes…'}
+                  </Text>
+                </View>
+              </View>
+            )}
+          </View>
+        }
+      />
 
       {/* Input Bar */}
       <View style={styles.inputBar}>
@@ -1049,6 +1080,7 @@ export function ChatScreen({
             accessibilityLabel="Attach file"
             onPress={handleAttachFile}
             disabled={isUploading}
+            hitSlop={{ top: 6, left: 6, right: 6, bottom: 6 }}
             style={styles.iconBtn}
           >
             {isUploading ? (
@@ -1058,18 +1090,11 @@ export function ChatScreen({
             )}
           </Pressable>
           <Pressable
-            accessibilityLabel="Voice input"
-            onPress={() => Alert.alert('Voice Input', 'Speak your question or prompt.')}
-            style={styles.iconBtn}
-          >
-            <MicIcon size={18} color={colors.textMuted} />
-          </Pressable>
-          <Pressable
             accessibilityLabel="Send message"
             onPress={handleSendMessage}
             style={[styles.sendBtn, !inputText.trim() && styles.sendBtnDisabled]}
           >
-            <SendIcon size={18} color="#FFFFFF" />
+            <SendIcon size={18} color={colors.surface} />
           </Pressable>
         </View>
       </View>
@@ -1112,12 +1137,12 @@ const styles = StyleSheet.create({
   pickerEmptyCard: { backgroundColor: colors.brandGreenSoft, borderRadius: 16, borderWidth: 1, borderColor: colors.brandGreenLight, padding: 20, alignItems: 'center', gap: 8 },
   pickerEmptyTitle: { fontFamily: typography.serifBold, fontSize: 20, color: colors.textPrimary },
   pickerEmptyText: { fontFamily: typography.sansRegular, fontSize: 13.5, lineHeight: 20, color: colors.textSecondary, textAlign: 'center', marginBottom: 8 },
-  pickerButton: { height: 44, borderRadius: 22, backgroundColor: '#1E221D', alignItems: 'center', justifyContent: 'center', paddingHorizontal: 24 },
+  pickerButton: { height: 44, borderRadius: 22, backgroundColor: colors.inkButton, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 24 },
   pickerButtonPressed: { opacity: 0.85 },
-  pickerButtonText: { fontFamily: typography.sansSemiBold, fontSize: 14, color: '#FFFFFF' },
+  pickerButtonText: { fontFamily: typography.sansSemiBold, fontSize: 14, color: colors.surface },
   pickerList: { flex: 1 },
   pickerListContent: { paddingBottom: 24, gap: 10 },
-  pickerRow: { flexDirection: 'row', alignItems: 'center', gap: 12, backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: colors.borderLight, borderRadius: 14, paddingHorizontal: 14, paddingVertical: 14 },
+  pickerRow: { flexDirection: 'row', alignItems: 'center', gap: 12, backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.borderLight, borderRadius: 14, paddingHorizontal: 14, paddingVertical: 14 },
   pickerRowPressed: { opacity: 0.8 },
   pickerRowIcon: { width: 38, height: 38, borderRadius: 12, backgroundColor: colors.brandGreenSoft, alignItems: 'center', justifyContent: 'center' },
   pickerRowInfo: { flex: 1, gap: 2 },
@@ -1131,14 +1156,17 @@ const styles = StyleSheet.create({
   promptChipText: { fontFamily: typography.sansMedium, fontSize: 12.5, lineHeight: 16, color: colors.artifact.forest },
   artifactWrap: { marginBottom: 18 },
   thread: { gap: 18 },
+  chatList: { flex: 1 },
+  threadGap: { height: 18 },
+  chatFooterGap: { paddingTop: 18 },
   messageBubble: { padding: 16, borderRadius: 20 },
-  userBubble: { backgroundColor: colors.brandGreen, borderWidth: 0, alignSelf: 'flex-end', maxWidth: '88%', borderTopLeftRadius: 18, borderTopRightRadius: 18, borderBottomLeftRadius: 18, borderBottomRightRadius: 4, shadowColor: '#1A2C21', shadowOpacity: 0.14, shadowRadius: 12, shadowOffset: { width: 0, height: 4 }, elevation: 3 },
-  aiBubble: { backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: colors.borderLight, borderLeftWidth: 3, borderLeftColor: colors.brandGreen, alignSelf: 'flex-start', maxWidth: '92%', shadowColor: '#1A2C21', shadowOpacity: 0.05, shadowRadius: 8, shadowOffset: { width: 0, height: 2 }, elevation: 1 },
+  userBubble: { backgroundColor: colors.brandGreen, borderWidth: 0, alignSelf: 'flex-end', maxWidth: '88%', borderTopLeftRadius: 18, borderTopRightRadius: 18, borderBottomLeftRadius: 18, borderBottomRightRadius: 4, shadowColor: colors.brandGreenDark, shadowOpacity: 0.14, shadowRadius: 12, shadowOffset: { width: 0, height: 4 }, elevation: 3 },
+  aiBubble: { backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.borderLight, borderLeftWidth: 3, borderLeftColor: colors.brandGreen, alignSelf: 'flex-start', maxWidth: '92%', shadowColor: colors.brandGreenDark, shadowOpacity: 0.05, shadowRadius: 8, shadowOffset: { width: 0, height: 2 }, elevation: 1 },
   aiHeader: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 8 },
   aiLabel: { fontFamily: typography.sansSemiBold, fontSize: 11, color: colors.brandGreen, letterSpacing: 1.5 },
   materialTagBadge: { alignSelf: 'flex-start', backgroundColor: colors.brandGreenSoft, borderRadius: 999, paddingHorizontal: 8, paddingVertical: 4, marginBottom: 10 },
   materialTagText: { fontFamily: typography.sansSemiBold, fontSize: 10, letterSpacing: 1.2, textTransform: 'uppercase', color: colors.brandGreen },
-  messageText: { fontFamily: typography.sansRegular, fontSize: 15, lineHeight: 24, color: '#FFFFFF' },
+  messageText: { fontFamily: typography.sansRegular, fontSize: 15, lineHeight: 24, color: colors.surface },
   replyContent: { gap: 2 },
   replyLine: { fontFamily: typography.sansRegular, fontSize: 15, lineHeight: 24, color: colors.textPrimary },
   replySpacer: { height: 10 },
@@ -1150,7 +1178,7 @@ const styles = StyleSheet.create({
   bulletTitle: { fontFamily: typography.sansSemiBold, fontSize: 14, color: colors.textPrimary },
   bulletContent: { fontFamily: typography.sansRegular, fontSize: 14, lineHeight: 22, color: colors.textSecondary, paddingLeft: 12 },
   summaryCard: {
-    backgroundColor: '#FFFFFF',
+    backgroundColor: colors.surface,
     borderRadius: 16,
     borderWidth: 1,
     borderColor: colors.borderLight,
@@ -1214,7 +1242,7 @@ const styles = StyleSheet.create({
   loadingIndicator: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 12 },
   loadingText: { fontFamily: typography.sansRegular, fontSize: 13, color: colors.textMuted },
   typingBubble: {
-    backgroundColor: '#FFFFFF',
+    backgroundColor: colors.surface,
     borderRadius: 18,
     borderWidth: 1,
     borderColor: colors.borderLight,
@@ -1225,18 +1253,18 @@ const styles = StyleSheet.create({
     gap: 8,
     alignSelf: 'flex-start',
     maxWidth: '92%',
-    shadowColor: '#1A2C21',
+    shadowColor: colors.brandGreenDark,
     shadowOpacity: 0.05,
     shadowRadius: 8,
     shadowOffset: { width: 0, height: 2 },
     elevation: 1,
   },
   typingRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
-  inputBar: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 8, paddingVertical: 7, backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: colors.borderLight, borderRadius: 22, marginHorizontal: 12, marginBottom: 10, gap: 8, shadowColor: '#1A2C21', shadowOpacity: 0.06, shadowRadius: 12, shadowOffset: { width: 0, height: -2 }, elevation: 3 },
+  inputBar: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 8, paddingVertical: 7, backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.borderLight, borderRadius: 22, marginHorizontal: 12, marginBottom: 10, gap: 8, shadowColor: colors.brandGreenDark, shadowOpacity: 0.06, shadowRadius: 12, shadowOffset: { width: 0, height: -2 }, elevation: 3 },
   textInput: { flex: 1, fontFamily: typography.sansRegular, fontSize: 15, color: colors.textPrimary, maxHeight: 90, paddingVertical: 9, paddingHorizontal: 14, backgroundColor: 'transparent', borderRadius: 16 },
   actionButtons: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   iconBtn: { width: 34, height: 34, borderRadius: 10, backgroundColor: 'transparent', alignItems: 'center', justifyContent: 'center' },
-  sendBtn: { width: 40, height: 40, borderRadius: 20, backgroundColor: colors.brandGreen, alignItems: 'center', justifyContent: 'center', shadowColor: '#1A2C21', shadowOpacity: 0.2, shadowRadius: 8, shadowOffset: { width: 0, height: 3 }, elevation: 3 },
+  sendBtn: { width: 40, height: 40, borderRadius: 20, backgroundColor: colors.brandGreen, alignItems: 'center', justifyContent: 'center', shadowColor: colors.brandGreenDark, shadowOpacity: 0.2, shadowRadius: 8, shadowOffset: { width: 0, height: 3 }, elevation: 3 },
   sendBtnDisabled: { backgroundColor: '#B9C6B9' },
   // Chat-hub launcher card (quiz / flashcards ready)
   launcherCard: {

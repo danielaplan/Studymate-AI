@@ -1,9 +1,9 @@
 import React from 'react';
-import { View, Text, StyleSheet, Pressable, Image } from 'react-native';
+import { View, Text, StyleSheet, Pressable } from 'react-native';
 import { colors, typography } from '../theme';
 import { MenuIcon, BackIcon, CloseIcon } from './Icons';
-
-const DEFAULT_PROFILE_IMG = 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=160&q=80';
+import { Monogram } from './Monogram';
+import { IconButton } from './IconButton';
 
 interface HeaderProps {
   title?: string;
@@ -37,29 +37,23 @@ export function Header({
     <View style={styles.container}>
       <View style={styles.leftContainer}>
         {hideLeft ? null : showBack ? (
-          <Pressable
+          <IconButton
             accessibilityLabel="Go back"
             onPress={onBack}
-            style={({ pressed }) => [styles.iconButton, pressed && styles.pressed]}
-          >
-            <BackIcon size={20} color={colors.brandGreen} />
-          </Pressable>
+            icon={<BackIcon size={20} color={colors.brandGreen} />}
+          />
         ) : showClose ? (
-          <Pressable
+          <IconButton
             accessibilityLabel="Close"
             onPress={onClose}
-            style={({ pressed }) => [styles.iconButton, pressed && styles.pressed]}
-          >
-            <CloseIcon size={20} color={colors.textPrimary} />
-          </Pressable>
+            icon={<CloseIcon size={20} color={colors.textPrimary} />}
+          />
         ) : (
-          <Pressable
+          <IconButton
             accessibilityLabel="Open navigation menu"
             onPress={onMenu}
-            style={({ pressed }) => [styles.iconButton, pressed && styles.pressed]}
-          >
-            <MenuIcon size={20} color={colors.brandGreen} />
-          </Pressable>
+            icon={<MenuIcon size={20} color={colors.brandGreen} />}
+          />
         )}
       </View>
 
@@ -78,9 +72,10 @@ export function Header({
           <Pressable
             accessibilityLabel="User Profile"
             onPress={onProfile}
+            hitSlop={{ top: 6, left: 6, right: 6, bottom: 6 }}
             style={({ pressed }) => [styles.profileWrapper, pressed && styles.pressed]}
           >
-            <Image source={{ uri: DEFAULT_PROFILE_IMG }} style={styles.profileAvatar} />
+            <Monogram size={32} />
           </Pressable>
         )}
       </View>
@@ -107,16 +102,6 @@ const styles = StyleSheet.create({
     width: 44,
     alignItems: 'flex-end',
   },
-  iconButton: {
-    width: 32,
-    height: 32,
-    borderRadius: 10,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: colors.surfaceElevated,
-    borderWidth: 1,
-    borderColor: colors.borderLight,
-  },
   brandTitle: {
     color: colors.brandGreen,
     fontFamily: typography.display,
@@ -130,11 +115,6 @@ const styles = StyleSheet.create({
     borderRadius: 16,
     borderWidth: 1,
     borderColor: colors.lineStrong,
-  },
-  profileAvatar: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
   },
   textButton: {
     paddingVertical: 4,

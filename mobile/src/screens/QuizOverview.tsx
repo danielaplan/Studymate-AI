@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { View, Text, StyleSheet, Pressable, ScrollView } from 'react-native';
+import { View, Text, StyleSheet, Pressable, FlatList } from 'react-native';
 import { colors, typography } from '../theme';
 import { Header } from '../components/Header';
 import { AnalyticsIcon } from '../components/Icons';
@@ -16,8 +16,8 @@ interface QuizOverviewProps {
 }
 
 const CORRECT = colors.brandGreen;
-const INCORRECT = '#D9694E';
-const AMBER = '#E2A23B';
+const INCORRECT = colors.error;
+const AMBER = colors.warning;
 
 function bandColor(pct: number): string {
   if (pct >= 80) return CORRECT;
@@ -53,146 +53,154 @@ function QuizOverview({ questions, answers, subjectName, onClose, onRetake }: Qu
   return (
     <View style={styles.container}>
       <Header showClose onClose={onClose} />
-      <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
-        <Text style={styles.title}>Quiz Results</Text>
-        {subjectName ? <Text style={styles.subtitle}>{subjectName}</Text> : null}
+      <FlatList
+        style={{ flex: 1 }}
+        contentContainerStyle={styles.scrollContent}
+        showsVerticalScrollIndicator={false}
+        data={questions}
+        keyExtractor={(q) => q.id}
+        ListHeaderComponent={
+          <>
+            <Text style={styles.title}>Quiz Results</Text>
+            {subjectName ? <Text style={styles.subtitle}>{subjectName}</Text> : null}
 
-        {/* Score ring + proportion bar */}
-        <View style={styles.scoreCard}>
-          <View style={[styles.ring, { borderColor: ringColor }]}>
-            <Text style={[styles.ringPct, { color: ringColor }]}>{pct}%</Text>
-            <Text style={styles.ringLabel}>{correctCount}/{total} correct</Text>
-          </View>
-          <View style={styles.ringSide}>
-            <Text style={styles.scoreHeadline}>
-              You scored {correctCount} of {total}
-            </Text>
-            <View style={styles.propBar}>
-              <View style={[styles.propFill, { width: `${pct}%`, backgroundColor: CORRECT }]} />
-              <View style={[styles.propFillMiss, { width: `${100 - pct}%`, backgroundColor: INCORRECT }]} />
-            </View>
-            <View style={styles.propLegend}>
-              <View style={styles.legendItem}>
-                <View style={[styles.legendDot, { backgroundColor: CORRECT }]} />
-                <Text style={styles.legendText}>{correctCount} correct</Text>
+            {/* Score ring + proportion bar */}
+            <View style={styles.scoreCard}>
+              <View style={[styles.ring, { borderColor: ringColor }]}>
+                <Text style={[styles.ringPct, { color: ringColor }]}>{pct}%</Text>
+                <Text style={styles.ringLabel}>{correctCount}/{total} correct</Text>
               </View>
-              <View style={styles.legendItem}>
-                <View style={[styles.legendDot, { backgroundColor: INCORRECT }]} />
-                <Text style={styles.legendText}>{incorrectCount} incorrect</Text>
+              <View style={styles.ringSide}>
+                <Text style={styles.scoreHeadline}>
+                  You scored {correctCount} of {total}
+                </Text>
+                <View style={styles.propBar}>
+                  <View style={[styles.propFill, { width: `${pct}%`, backgroundColor: CORRECT }]} />
+                  <View style={[styles.propFillMiss, { width: `${100 - pct}%`, backgroundColor: INCORRECT }]} />
+                </View>
+                <View style={styles.propLegend}>
+                  <View style={styles.legendItem}>
+                    <View style={[styles.legendDot, { backgroundColor: CORRECT }]} />
+                    <Text style={styles.legendText}>{correctCount} correct</Text>
+                  </View>
+                  <View style={styles.legendItem}>
+                    <View style={[styles.legendDot, { backgroundColor: INCORRECT }]} />
+                    <Text style={styles.legendText}>{incorrectCount} incorrect</Text>
+                  </View>
+                </View>
               </View>
             </View>
-          </View>
-        </View>
 
-        {/* Analysis */}
-        <View style={styles.analysisCard}>
-          <View style={styles.analysisHeader}>
-            <View style={styles.analysisIconWrap}>
-              <AnalyticsIcon size={16} color={colors.brandGreenDark} />
+            {/* Analysis */}
+            <View style={styles.analysisCard}>
+              <View style={styles.analysisHeader}>
+                <View style={styles.analysisIconWrap}>
+                  <AnalyticsIcon size={16} color={colors.brandGreenDark} />
+                </View>
+                <Text style={styles.analysisLabel}>ANALYSIS</Text>
+              </View>
+              <Text style={styles.analysisText}>{analysisText(pct)}</Text>
             </View>
-            <Text style={styles.analysisLabel}>ANALYSIS</Text>
-          </View>
-          <Text style={styles.analysisText}>{analysisText(pct)}</Text>
-        </View>
 
-        {/* Per-topic bars */}
-        {topicRows.length > 1 && (
-          <View style={styles.block}>
-            <Text style={styles.blockTitle}>Performance by topic</Text>
-            <View style={styles.topicList}>
-              {topicRows.map(([topic, { correct, total: t }]) => {
-                const tp = t > 0 ? Math.round((correct / t) * 100) : 0;
-                return (
-                  <View key={topic} style={styles.topicRow}>
-                    <View style={styles.topicHead}>
-                      <Text style={styles.topicName} numberOfLines={2}>{topic}</Text>
-                      <Text style={styles.topicPct}>{correct}/{t}</Text>
-                    </View>
-                    <View style={styles.topicBarTrack}>
-                      <View style={[styles.topicBarFill, { width: `${tp}%`, backgroundColor: bandColor(tp) }]} />
-                    </View>
-                  </View>
-                );
-              })}
-            </View>
-          </View>
-        )}
-
-        {/* Review each question with correct answer + explanation */}
-        <View style={styles.block}>
-          <Text style={styles.blockTitle}>Review answers</Text>
-          {questions.map((q, i) => {
-            const ans = answers[i];
-            const isOpen = expanded === i;
-            return (
-              <View key={q.id} style={styles.reviewCard}>
-                <Pressable
-                  accessibilityLabel={`Review question ${i + 1}`}
-                  onPress={() => setExpanded(isOpen ? null : i)}
-                  style={({ pressed }) => [styles.reviewHead, pressed && styles.rowPressed]}
-                >
-                  <View style={[styles.reviewBadge, ans?.isCorrect ? styles.badgeOk : styles.badgeBad]}>
-                    <Text style={styles.reviewBadgeText}>{ans?.isCorrect ? '✓' : '✕'}</Text>
-                  </View>
-                  <Text style={styles.reviewQuestion} numberOfLines={isOpen ? undefined : 2}>
-                    {i + 1}. {q.questionText}
-                  </Text>
-                  <Text style={styles.reviewToggle}>{isOpen ? 'Hide' : 'Why?'}</Text>
-                </Pressable>
-
-                <View style={styles.optionsStack}>
-                  {q.options.map((opt, idx) => {
-                    const isCorrectOpt = idx === q.correctIndex;
-                    const isUserOpt = ans?.selected === idx;
-                    const wrongPick = isUserOpt && !isCorrectOpt;
-                    const optStyle = isCorrectOpt
-                      ? styles.optCorrect
-                      : wrongPick
-                      ? styles.optWrong
-                      : styles.optNeutral;
+            {/* Per-topic bars */}
+            {topicRows.length > 1 && (
+              <View style={styles.block}>
+                <Text style={styles.blockTitle}>Performance by topic</Text>
+                <View style={styles.topicList}>
+                  {topicRows.map(([topic, { correct, total: t }]) => {
+                    const tp = t > 0 ? Math.round((correct / t) * 100) : 0;
                     return (
-                      <View key={idx} style={[styles.optRow, optStyle]}>
-                        <Text style={styles.optMarker}>
-                          {isCorrectOpt ? '✓' : wrongPick ? '✕' : ''}
-                        </Text>
-                        <Text style={[styles.optText, isCorrectOpt && styles.optTextCorrect, wrongPick && styles.optTextWrong]}>
-                          {opt}
-                        </Text>
+                      <View key={topic} style={styles.topicRow}>
+                        <View style={styles.topicHead}>
+                          <Text style={styles.topicName} numberOfLines={2}>{topic}</Text>
+                          <Text style={styles.topicPct}>{correct}/{t}</Text>
+                        </View>
+                        <View style={styles.topicBarTrack}>
+                          <View style={[styles.topicBarFill, { width: `${tp}%`, backgroundColor: bandColor(tp) }]} />
+                        </View>
                       </View>
                     );
                   })}
                 </View>
-
-                {isOpen && (
-                  <View style={styles.whyBox}>
-                    <Text style={styles.whyLabel}>WHY — BASED ON YOUR SOURCES</Text>
-                    <Text style={styles.whyText}>
-                      {q.explanation || 'No source explanation was stored for this question.'}
-                    </Text>
-                  </View>
-                )}
               </View>
-            );
-          })}
-        </View>
+            )}
 
-        <View style={styles.actionRow}>
-          <Pressable
-            accessibilityLabel="Retake quiz"
-            onPress={onRetake}
-            style={({ pressed }) => [styles.retakeBtn, pressed && styles.retakePressed]}
-          >
-            <Text style={styles.retakeBtnText}>Retake Quiz</Text>
-          </Pressable>
-          <Pressable
-            accessibilityLabel="Return to study"
-            onPress={onClose}
-            style={({ pressed }) => [styles.doneBtn, pressed && styles.donePressed]}
-          >
-            <Text style={styles.doneBtnText}>Return to Study</Text>
-          </Pressable>
-        </View>
-      </ScrollView>
+            {/* Review answers header */}
+            <Text style={styles.blockTitle}>Review answers</Text>
+          </>
+        }
+        renderItem={({ item: q, index: i }) => {
+          const ans = answers[i];
+          const isOpen = expanded === i;
+          return (
+            <View style={styles.reviewCard}>
+              <Pressable
+                accessibilityLabel={`Review question ${i + 1}`}
+                onPress={() => setExpanded(isOpen ? null : i)}
+                style={({ pressed }) => [styles.reviewHead, pressed && styles.rowPressed]}
+              >
+                <View style={[styles.reviewBadge, ans?.isCorrect ? styles.badgeOk : styles.badgeBad]}>
+                  <Text style={styles.reviewBadgeText}>{ans?.isCorrect ? '✓' : '✕'}</Text>
+                </View>
+                <Text style={styles.reviewQuestion} numberOfLines={isOpen ? undefined : 2}>
+                  {i + 1}. {q.questionText}
+                </Text>
+                <Text style={styles.reviewToggle}>{isOpen ? 'Hide' : 'Why?'}</Text>
+              </Pressable>
+
+              <View style={styles.optionsStack}>
+                {q.options.map((opt, idx) => {
+                  const isCorrectOpt = idx === q.correctIndex;
+                  const isUserOpt = ans?.selected === idx;
+                  const wrongPick = isUserOpt && !isCorrectOpt;
+                  const optStyle = isCorrectOpt
+                    ? styles.optCorrect
+                    : wrongPick
+                    ? styles.optWrong
+                    : styles.optNeutral;
+                  return (
+                    <View key={idx} style={[styles.optRow, optStyle]}>
+                      <Text style={styles.optMarker}>
+                        {isCorrectOpt ? '✓' : wrongPick ? '✕' : ''}
+                      </Text>
+                      <Text style={[styles.optText, isCorrectOpt && styles.optTextCorrect, wrongPick && styles.optTextWrong]}>
+                        {opt}
+                      </Text>
+                    </View>
+                  );
+                })}
+              </View>
+
+              {isOpen && (
+                <View style={styles.whyBox}>
+                  <Text style={styles.whyLabel}>WHY — BASED ON YOUR SOURCES</Text>
+                  <Text style={styles.whyText}>
+                    {q.explanation || 'No source explanation was stored for this question.'}
+                  </Text>
+                </View>
+              )}
+            </View>
+          );
+        }}
+        ListFooterComponent={
+          <View style={styles.actionRow}>
+            <Pressable
+              accessibilityLabel="Retake quiz"
+              onPress={onRetake}
+              style={({ pressed }) => [styles.retakeBtn, pressed && styles.retakePressed]}
+            >
+              <Text style={styles.retakeBtnText}>Retake Quiz</Text>
+            </Pressable>
+            <Pressable
+              accessibilityLabel="Return to study"
+              onPress={onClose}
+              style={({ pressed }) => [styles.doneBtn, pressed && styles.donePressed]}
+            >
+              <Text style={styles.doneBtnText}>Return to Study</Text>
+            </Pressable>
+          </View>
+        }
+      />
     </View>
   );
 }
@@ -206,7 +214,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 18,
-    backgroundColor: '#FFFFFF',
+    backgroundColor: colors.surface,
     borderWidth: 1,
     borderColor: colors.borderLight,
     borderRadius: 18,
@@ -265,7 +273,7 @@ const styles = StyleSheet.create({
   topicBarFill: { height: 12, borderRadius: 6 },
   topicPct: { fontFamily: typography.sansMedium, fontSize: 12, color: colors.textMuted },
   reviewCard: {
-    backgroundColor: '#FFFFFF',
+    backgroundColor: colors.surface,
     borderWidth: 1,
     borderColor: colors.borderLight,
     borderRadius: 16,
@@ -282,7 +290,7 @@ const styles = StyleSheet.create({
     marginTop: 2,
   },
   badgeOk: { backgroundColor: colors.brandGreenSoft },
-  badgeBad: { backgroundColor: '#F7DED6' },
+  badgeBad: { backgroundColor: colors.errorSoft },
   reviewBadgeText: { fontFamily: typography.sansBold, fontSize: 14, color: colors.textPrimary },
   reviewQuestion: {
     flex: 1,
@@ -304,11 +312,11 @@ const styles = StyleSheet.create({
   },
   optNeutral: { backgroundColor: colors.surface, borderColor: colors.borderLight },
   optCorrect: { backgroundColor: colors.brandGreenSoft, borderColor: colors.brandGreen },
-  optWrong: { backgroundColor: '#F7DED6', borderColor: INCORRECT },
+  optWrong: { backgroundColor: colors.errorSoft, borderColor: INCORRECT },
   optMarker: { width: 16, fontFamily: typography.sansBold, fontSize: 14, color: colors.textPrimary, textAlign: 'center' },
   optText: { flex: 1, fontFamily: typography.sansRegular, fontSize: 13, color: colors.textSecondary, lineHeight: 19 },
   optTextCorrect: { fontFamily: typography.sansMedium, color: colors.textPrimary },
-  optTextWrong: { fontFamily: typography.sansMedium, color: '#9A3A22' },
+  optTextWrong: { fontFamily: typography.sansMedium, color: colors.errorText },
   whyBox: {
     marginTop: 12,
     padding: 14,

@@ -3,6 +3,7 @@ import { View, Text, StyleSheet, Pressable, ScrollView, ActivityIndicator } from
 import { colors, typography } from '../theme';
 import { MaterialAPI } from '../api/client';
 import { CloseIcon } from './Icons';
+import { IconButton } from './IconButton';
 
 export interface CardsPrefs {
   source: number | 'all';
@@ -51,9 +52,7 @@ export function CardsSetupSheet({ visible, subjectId, subjectName, materials, on
         <View style={styles.sheetHandle} />
         <View style={styles.sheetHeader}>
           <Text style={styles.sheetTitle}>Create Flashcards</Text>
-          <Pressable onPress={onClose} accessibilityLabel="Close" style={styles.closeBtn}>
-            <CloseIcon size={18} color={colors.textPrimary} />
-          </Pressable>
+          <IconButton onPress={onClose} accessibilityLabel="Close" icon={<CloseIcon size={18} color={colors.textPrimary} />} />
         </View>
         <Text style={styles.sheetSub}>
           {subjectName ? `From “${subjectName}”${subjectId ? '' : ''}` : 'From your study materials'}
@@ -152,7 +151,7 @@ const styles = StyleSheet.create({
     paddingTop: 10,
     paddingBottom: 20,
     maxHeight: '82%',
-    shadowColor: '#000000',
+    shadowColor: colors.ink,
     shadowOpacity: 0.18,
     shadowRadius: 24,
     shadowOffset: { width: 0, height: -8 },
@@ -161,7 +160,6 @@ const styles = StyleSheet.create({
   sheetHandle: { alignSelf: 'center', width: 40, height: 4, borderRadius: 2, backgroundColor: colors.borderLight, marginBottom: 12 },
   sheetHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 },
   sheetTitle: { fontFamily: typography.display, fontSize: 22, color: colors.textPrimary },
-  closeBtn: { width: 32, height: 32, borderRadius: 10, backgroundColor: colors.surfaceElevated, borderWidth: 1, borderColor: colors.borderLight, alignItems: 'center', justifyContent: 'center' },
   sheetSub: { fontFamily: typography.sansRegular, fontSize: 13, color: colors.textMuted, marginBottom: 16 },
   sheetScroll: { maxHeight: 360 },
   field: { marginBottom: 18 },
@@ -186,7 +184,7 @@ const styles = StyleSheet.create({
     backgroundColor: colors.brandGreen,
     alignItems: 'center',
     justifyContent: 'center',
-    shadowColor: '#000000',
+    shadowColor: colors.ink,
     shadowOpacity: 0.08,
     shadowRadius: 8,
     shadowOffset: { width: 0, height: 4 },

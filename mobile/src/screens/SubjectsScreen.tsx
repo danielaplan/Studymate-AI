@@ -1,9 +1,10 @@
 import { useState, useEffect, useRef } from 'react';
-import { View, Text, StyleSheet, TextInput, Pressable, ScrollView, ActivityIndicator, Alert, Modal, Animated } from 'react-native';
+import { View, Text, StyleSheet, TextInput, Pressable, FlatList, ActivityIndicator, Alert, Modal, Animated } from 'react-native';
 import { colors, typography } from '../theme';
 import { Header } from '../components/Header';
 import { SearchIcon, CloseIcon, BackIcon } from '../components/Icons';
 import { SubjectCard } from '../components/SubjectCard';
+import { IconButton } from '../components/IconButton';
 import { SubjectItem } from '../types';
 import { listSubjects, createSubject, deleteSubject, updateSubject, SubjectAPI } from '../api/client';
 import { clearSubjectMemory } from '../storage/subjectMemory';
@@ -187,75 +188,81 @@ export function SubjectsScreen({ onOpenMenu, onOpenProfile, onSelectSubject, onC
       ) : (
         <Header onMenu={onOpenMenu} onProfile={onOpenProfile} />
       )}
-      <ScrollView contentContainerStyle={styles.scrollContent} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
-        <Text style={styles.libraryTitle}>Subjects Library</Text>
+      <FlatList
+        style={styles.subjectListOuter}
+        contentContainerStyle={styles.scrollContent}
+        keyboardShouldPersistTaps="handled"
+        showsVerticalScrollIndicator={false}
+        data={filtered}
+        keyExtractor={(s) => s.id}
+        ListHeaderComponent={
+          <>
+            <Text style={styles.libraryTitle}>Subjects Library</Text>
 
-        {/* Search Bar */}
-        <View style={styles.searchRow}>
-          <SearchIcon size={18} color={colors.textPlaceholder} />
-          <TextInput
-            placeholder="Search subjects..."
-            placeholderTextColor={colors.textPlaceholder}
-            value={searchQuery}
-            onChangeText={setSearchQuery}
-            style={styles.searchInput}
-          />
-        </View>
-
-        {/* Add New Subject */}
-        {isAdding ? (
-          <View style={styles.addSubjectForm}>
-            <TextInput
-              placeholder="Subject name..."
-              placeholderTextColor={colors.textPlaceholder}
-              value={newSubjectName}
-              onChangeText={setNewSubjectName}
-              style={styles.addSubjectInput}
-              autoFocus
-            />
-            <View style={styles.addSubjectButtons}>
-              <Pressable onPress={() => setIsAdding(false)} style={styles.cancelBtn}>
-                <Text style={styles.cancelBtnText}>Cancel</Text>
-              </Pressable>
-              <Pressable onPress={handleAddSubject} style={styles.confirmBtn}>
-                <Text style={styles.confirmBtnText}>Add Subject</Text>
-              </Pressable>
+            {/* Search Bar */}
+            <View style={styles.searchRow}>
+              <SearchIcon size={18} color={colors.textPlaceholder} />
+              <TextInput
+                placeholder="Search subjects..."
+                placeholderTextColor={colors.textPlaceholder}
+                value={searchQuery}
+                onChangeText={setSearchQuery}
+                style={styles.searchInput}
+              />
             </View>
-          </View>
-        ) : (
-          <Pressable
-            accessibilityLabel="Add New Subject"
-            onPress={() => setIsAdding(true)}
-            style={({ pressed }) => [styles.addSubjectCard, pressed && styles.cardPressed]}
-          >
-            <Text style={styles.addSubjectText}>+ Add New Subject</Text>
-          </Pressable>
+
+            {/* Add New Subject */}
+            {isAdding ? (
+              <View style={styles.addSubjectForm}>
+                <TextInput
+                  placeholder="Subject name..."
+                  placeholderTextColor={colors.textPlaceholder}
+                  value={newSubjectName}
+                  onChangeText={setNewSubjectName}
+                  style={styles.addSubjectInput}
+                  autoFocus
+                />
+                <View style={styles.addSubjectButtons}>
+                  <Pressable onPress={() => setIsAdding(false)} style={styles.cancelBtn}>
+                    <Text style={styles.cancelBtnText}>Cancel</Text>
+                  </Pressable>
+                  <Pressable onPress={handleAddSubject} style={styles.confirmBtn}>
+                    <Text style={styles.confirmBtnText}>Add Subject</Text>
+                  </Pressable>
+                </View>
+              </View>
+            ) : (
+              <Pressable
+                accessibilityLabel="Add New Subject"
+                onPress={() => setIsAdding(true)}
+                style={({ pressed }) => [styles.addSubjectCard, pressed && styles.cardPressed]}
+              >
+                <Text style={styles.addSubjectText}>+ Add New Subject</Text>
+              </Pressable>
+            )}
+
+            {/* Section Overline */}
+            <View style={styles.sectionHeader}>
+              <Text style={styles.sectionOverline}>ALL SUBJECTS</Text>
+              {isLoading && <ActivityIndicator size="small" color={colors.brandGreen} />}
+            </View>
+          </>
+        }
+        ListEmptyComponent={
+          !isLoading ? <Text style={styles.emptyText}>No subjects found. Add one above!</Text> : null
+        }
+        ItemSeparatorComponent={() => <View style={styles.subjectRowGap} />}
+        renderItem={({ item: subject }) => (
+          <SubjectCard
+            subject={subject}
+            onPress={() => onSelectSubject(subject)}
+            onOptionsPress={() => {
+              setSelectedSubjectMenu(subject);
+              setRenameValue(subject.name);
+            }}
+          />
         )}
-
-        {/* Section Overline */}
-        <View style={styles.sectionHeader}>
-          <Text style={styles.sectionOverline}>ALL SUBJECTS</Text>
-          {isLoading && <ActivityIndicator size="small" color={colors.brandGreen} />}
-        </View>
-
-        {/* Subjects List */}
-        <View style={styles.subjectsList}>
-          {filtered.map((subject) => (
-            <SubjectCard
-              key={subject.id}
-              subject={subject}
-              onPress={() => onSelectSubject(subject)}
-              onOptionsPress={() => {
-                setSelectedSubjectMenu(subject);
-                setRenameValue(subject.name);
-              }}
-            />
-          ))}
-          {filtered.length === 0 && !isLoading && (
-            <Text style={styles.emptyText}>No subjects found. Add one above!</Text>
-          )}
-        </View>
-      </ScrollView>
+      />
 
       <Modal
         visible={Boolean(selectedSubjectMenu)}
@@ -275,9 +282,7 @@ export function SubjectsScreen({ onOpenMenu, onOpenProfile, onSelectSubject, onC
           >
             <View style={styles.menuHeader}>
               <Text style={styles.menuTitle}>{selectedSubjectMenu?.name || 'Subject options'}</Text>
-              <Pressable onPress={closeMenu} style={styles.closeButton}>
-                <CloseIcon size={16} color={colors.textPrimary} />
-              </Pressable>
+              <IconButton onPress={closeMenu} accessibilityLabel="Close menu" icon={<CloseIcon size={16} color={colors.textPrimary} />} />
             </View>
 
             {showDeleteConfirm && selectedSubjectMenu ? (
@@ -335,6 +340,8 @@ export function SubjectsScreen({ onOpenMenu, onOpenProfile, onSelectSubject, onC
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.background },
+  subjectListOuter: { flex: 1 },
+  subjectRowGap: { height: 12 },
   overlayTopBar: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -369,7 +376,7 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
     gap: 10,
     marginBottom: 22,
-    shadowColor: '#000000',
+    shadowColor: colors.ink,
     shadowOpacity: 0.02,
     shadowRadius: 8,
     shadowOffset: { width: 0, height: 4 },
@@ -389,14 +396,14 @@ const styles = StyleSheet.create({
   },
   addSubjectText: { fontFamily: typography.sansSemiBold, fontSize: 15, color: colors.brandGreen },
   addSubjectForm: {
-    backgroundColor: '#FFFFFF',
+    backgroundColor: colors.surface,
     borderRadius: 18,
     borderWidth: 1,
     borderColor: colors.borderLight,
     padding: 16,
     marginBottom: 28,
     gap: 12,
-    shadowColor: '#000000',
+    shadowColor: colors.ink,
     shadowOpacity: 0.03,
     shadowRadius: 10,
     shadowOffset: { width: 0, height: 4 },
@@ -407,7 +414,7 @@ const styles = StyleSheet.create({
   cancelBtn: { flex: 1, height: 42, alignItems: 'center', justifyContent: 'center', borderRadius: 14, borderWidth: 1, borderColor: colors.borderMedium },
   cancelBtnText: { fontFamily: typography.sansMedium, fontSize: 14, color: colors.textMuted },
   confirmBtn: { flex: 1, height: 42, alignItems: 'center', justifyContent: 'center', borderRadius: 14, backgroundColor: colors.brandGreen },
-  confirmBtnText: { fontFamily: typography.sansMedium, fontSize: 14, color: '#FFFFFF' },
+  confirmBtnText: { fontFamily: typography.sansMedium, fontSize: 14, color: colors.surface },
   sectionHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 },
   sectionOverline: { fontFamily: typography.sansSemiBold, fontSize: 11, color: colors.textMuted, letterSpacing: 1.5 },
   subjectsList: { gap: 12 },
@@ -423,7 +430,7 @@ const styles = StyleSheet.create({
   menuSheet: {
     width: '100%',
     maxWidth: 420,
-    backgroundColor: '#FFFFFF',
+    backgroundColor: colors.surface,
     borderRadius: 22,
     borderWidth: 1,
     borderColor: colors.borderLight,
@@ -440,14 +447,6 @@ const styles = StyleSheet.create({
     fontSize: 24,
     color: colors.textPrimary,
     letterSpacing: -0.4,
-  },
-  closeButton: {
-    width: 30,
-    height: 30,
-    borderRadius: 10,
-    backgroundColor: colors.surfaceMuted,
-    alignItems: 'center',
-    justifyContent: 'center',
   },
   menuActionButton: {
     paddingVertical: 12,
@@ -501,13 +500,13 @@ const styles = StyleSheet.create({
   primaryButtonText: {
     fontFamily: typography.sansMedium,
     fontSize: 14,
-    color: '#FFFFFF',
+    color: colors.surface,
   },
   confirmationCard: {
     borderWidth: 1,
-    borderColor: '#F3C9C9',
+    borderColor: colors.errorBorder,
     borderRadius: 14,
-    backgroundColor: '#FFF7F7',
+    backgroundColor: colors.errorSoft,
     padding: 14,
     gap: 6,
   },
@@ -532,15 +531,15 @@ const styles = StyleSheet.create({
   deletePrimaryButtonText: {
     fontFamily: typography.sansMedium,
     fontSize: 14,
-    color: '#FFFFFF',
+    color: colors.surface,
   },
   deleteButton: {
     paddingVertical: 12,
     paddingHorizontal: 14,
     borderRadius: 12,
-    backgroundColor: '#FBE7E7',
+    backgroundColor: colors.errorSoft,
     borderWidth: 1,
-    borderColor: '#F3C9C9',
+    borderColor: colors.errorBorder,
     alignItems: 'center',
   },
   deleteButtonText: {

@@ -188,8 +188,13 @@ export function QuizScreen({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isCompleted]);
 
-  const question = questions[currentIdx] || questions[0];
-  const progressPercent = ((currentIdx + 1) / question.totalQuestions) * 100;
+  // Computed only when a question exists. These MUST stay guarded: on first
+  // render `questions` is `[]`, so an unconditional `question.totalQuestions`
+  // dereference throws before the loading/empty guards below can run — which
+  // blanks the whole screen on open (P0). The final return is only reached
+  // when `questions.length > 0`, so `question` is defined there.
+  const question = questions[currentIdx];
+  const progressPercent = question ? ((currentIdx + 1) / question.totalQuestions) * 100 : 0;
 
   const handleNext = () => {
     if (selectedOption === null) {
@@ -322,8 +327,8 @@ const styles = StyleSheet.create({
   emptyState: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 32, gap: 8 },
   emptyTitle: { fontFamily: typography.serifBold, fontSize: 24, lineHeight: 32, color: colors.textPrimary, textAlign: 'center', marginBottom: 4 },
   emptyText: { fontFamily: typography.sansRegular, fontSize: 14, lineHeight: 21, color: colors.textMuted, textAlign: 'center', marginBottom: 16 },
-  emptyButton: { height: 48, borderRadius: 24, backgroundColor: '#1E221D', alignItems: 'center', justifyContent: 'center', paddingHorizontal: 28 },
-  emptyButtonText: { fontFamily: typography.sansSemiBold, fontSize: 14, color: '#FFFFFF' },
+  emptyButton: { height: 48, borderRadius: 24, backgroundColor: colors.inkButton, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 28 },
+  emptyButtonText: { fontFamily: typography.sansSemiBold, fontSize: 14, color: colors.surface },
   loadingText: { fontFamily: typography.sansRegular, fontSize: 14, color: colors.textMuted, textAlign: 'center' },
   counterRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 },
   counterText: { fontFamily: typography.sansSemiBold, fontSize: 11, color: colors.textMuted, letterSpacing: 1.5 },
@@ -335,7 +340,7 @@ const styles = StyleSheet.create({
   topicTag: { fontFamily: typography.sansSemiBold, fontSize: 11, color: colors.textMuted, letterSpacing: 1.5, marginBottom: 12 },
   questionText: { fontFamily: typography.serifBold, fontSize: 28, lineHeight: 38, color: colors.textPrimary, marginBottom: 32 },
   optionsList: { marginBottom: 24 },
-  submitButton: { height: 52, borderRadius: 26, backgroundColor: '#1E221D', alignItems: 'center', justifyContent: 'center', marginBottom: 20 },
+  submitButton: { height: 52, borderRadius: 26, backgroundColor: colors.inkButton, alignItems: 'center', justifyContent: 'center', marginBottom: 20 },
   submitButtonPressed: { opacity: 0.85 },
-  submitButtonText: { fontFamily: typography.sansSemiBold, fontSize: 15, color: '#FFFFFF' },
+  submitButtonText: { fontFamily: typography.sansSemiBold, fontSize: 15, color: colors.surface },
 });

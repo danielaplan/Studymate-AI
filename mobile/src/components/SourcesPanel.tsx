@@ -172,7 +172,7 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
     paddingHorizontal: 12,
     borderRadius: 12,
-    backgroundColor: '#FFFFFF',
+    backgroundColor: colors.surface,
     borderWidth: 1,
     borderColor: colors.borderLight,
   },
@@ -199,5 +199,5 @@ const styles = StyleSheet.create({
   },
   toggleOn: { backgroundColor: colors.brandGreen, borderColor: colors.brandGreen },
   toggleOff: { backgroundColor: 'transparent', borderColor: colors.borderMedium },
-  check: { color: '#FFFFFF', fontFamily: typography.sansBold, fontSize: 14, lineHeight: 16 },
+  check: { color: colors.surface, fontFamily: typography.sansBold, fontSize: 14, lineHeight: 16 },
 });

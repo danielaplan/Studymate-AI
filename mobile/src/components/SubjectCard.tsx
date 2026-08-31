@@ -4,6 +4,7 @@ import { colors, typography } from '../theme';
 import { SubjectItem } from '../types';
 import { MasteryProgressBar } from './MasteryProgressBar';
 import { MoreVerticalIcon } from './Icons';
+import { IconButton } from './IconButton';
 
 interface SubjectCardProps {
   subject: SubjectItem;
@@ -80,13 +81,11 @@ export function SubjectCard({ subject, onPress, onOptionsPress }: SubjectCardPro
               <Text style={styles.title}>{subject.name}</Text>
             </View>
 
-            <Pressable
+            <IconButton
               accessibilityLabel="Subject options"
               onPress={onOptionsPress}
-              style={styles.optionsButton}
-            >
-              <MoreVerticalIcon size={18} color={colors.textMuted} />
-            </Pressable>
+              icon={<MoreVerticalIcon size={18} color={colors.textMuted} />}
+            />
           </View>
 
           <View style={styles.metaRow}>
@@ -108,7 +107,7 @@ const styles = StyleSheet.create({
     position: 'absolute',
     right: 12,
     top: 18,
-    backgroundColor: '#EAF3EC',
+    backgroundColor: colors.sageBadge,
     borderRadius: 999,
     paddingHorizontal: 10,
     paddingVertical: 6,
@@ -124,10 +123,10 @@ const styles = StyleSheet.create({
   },
   container: {
     borderRadius: 18,
-    backgroundColor: '#F9F8F4',
+    backgroundColor: colors.surfaceElevated,
     borderWidth: 1,
     borderColor: colors.borderLight,
-    shadowColor: '#000000',
+    shadowColor: colors.ink,
     shadowOpacity: 0.04,
     shadowRadius: 12,
     shadowOffset: { width: 0, height: 6 },
@@ -136,7 +135,7 @@ const styles = StyleSheet.create({
   pinnedContainer: {
     backgroundColor: '#F7F8F3',
     borderColor: '#C9D8C9',
-    shadowColor: '#243C2C',
+    shadowColor: colors.brandGreen,
     shadowOpacity: 0.08,
   },
   content: {
@@ -163,7 +162,7 @@ const styles = StyleSheet.create({
   },
   pinnedBadge: {
     alignSelf: 'flex-start',
-    backgroundColor: '#E7F1E7',
+    backgroundColor: colors.sageBadge,
     borderRadius: 999,
     paddingHorizontal: 8,
     paddingVertical: 4,
@@ -176,16 +175,6 @@ const styles = StyleSheet.create({
     letterSpacing: 0.6,
     color: colors.brandGreen,
     textTransform: 'uppercase',
-  },
-  optionsButton: {
-    width: 32,
-    height: 32,
-    borderRadius: 10,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: colors.surface,
-    borderWidth: 1,
-    borderColor: colors.borderLight,
   },
   metaRow: {
     flexDirection: 'row',

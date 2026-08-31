@@ -1,5 +1,5 @@
 import React, { useEffect, useRef } from 'react';
-import { Animated, View, Text, StyleSheet, Pressable } from 'react-native';
+import { Animated, View, Text, StyleSheet, Pressable, AccessibilityInfo } from 'react-native';
 import Svg, { Circle, Rect, Path } from 'react-native-svg';
 import { colors, typography } from '../theme';
 
@@ -13,18 +13,26 @@ export function OnboardingScreen({ onContinue, onSkip }: OnboardingScreenProps) 
   const slideAnim = useRef(new Animated.Value(20)).current;
 
   useEffect(() => {
-    Animated.parallel([
-      Animated.timing(fadeAnim, {
-        toValue: 1,
-        duration: 500,
-        useNativeDriver: true,
-      }),
-      Animated.timing(slideAnim, {
-        toValue: 0,
-        duration: 500,
-        useNativeDriver: true,
-      }),
-    ]).start();
+    // Respect Reduce Motion: skip the fade/slide intro, jump to final state.
+    AccessibilityInfo.isReduceMotionEnabled().then((reduce) => {
+      if (reduce) {
+        fadeAnim.setValue(1);
+        slideAnim.setValue(0);
+        return;
+      }
+      Animated.parallel([
+        Animated.timing(fadeAnim, {
+          toValue: 1,
+          duration: 500,
+          useNativeDriver: true,
+        }),
+        Animated.timing(slideAnim, {
+          toValue: 0,
+          duration: 500,
+          useNativeDriver: true,
+        }),
+      ]).start();
+    });
   }, [fadeAnim, slideAnim]);
 
   return (
@@ -75,12 +83,6 @@ export function OnboardingScreen({ onContinue, onSkip }: OnboardingScreenProps) 
         <Pressable accessibilityLabel="Skip onboarding" onPress={onSkip} style={styles.skipButton}>
           <Text style={styles.skipButtonText}>Skip</Text>
         </Pressable>
-
-        <View style={styles.paginationDots}>
-          <View style={[styles.dot, styles.activeDot]} />
-          <View style={styles.dot} />
-          <View style={styles.dot} />
-        </View>
       </View>
     </Animated.View>
   );
@@ -116,7 +118,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     borderWidth: 1,
     borderColor: colors.borderLight,
-    shadowColor: '#000000',
+    shadowColor: colors.ink,
     shadowOpacity: 0.04,
     shadowRadius: 18,
     shadowOffset: { width: 0, height: 10 },
@@ -159,11 +161,11 @@ const styles = StyleSheet.create({
   continueButton: {
     width: '100%',
     height: 58,
-    backgroundColor: '#1E221D',
+    backgroundColor: colors.inkButton,
     borderRadius: 20,
     alignItems: 'center',
     justifyContent: 'center',
-    shadowColor: '#000000',
+    shadowColor: colors.ink,
     shadowOpacity: 0.08,
     shadowRadius: 12,
     shadowOffset: { width: 0, height: 8 },
@@ -176,7 +178,7 @@ const styles = StyleSheet.create({
   continueButtonText: {
     fontFamily: typography.sansSemiBold,
     fontSize: 16,
-    color: '#FFFFFF',
+    color: colors.surface,
     letterSpacing: 0.4,
   },
   skipButton: {
@@ -187,23 +189,5 @@ const styles = StyleSheet.create({
     fontFamily: typography.sansMedium,
     fontSize: 14,
     color: colors.textMuted,
-  },
-  paginationDots: {
-    flexDirection: 'row',
-    gap: 8,
-    alignItems: 'center',
-    marginTop: 8,
-  },
-  dot: {
-    width: 7,
-    height: 7,
-    borderRadius: 3.5,
-    backgroundColor: '#D3D7CF',
-  },
-  activeDot: {
-    backgroundColor: '#1E221D',
-    width: 10,
-    height: 10,
-    borderRadius: 5,
   },
 });

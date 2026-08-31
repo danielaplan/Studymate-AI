@@ -21,6 +21,7 @@ import { colors } from './src/theme';
 import { ScreenName, TabName, SubjectItem, QuizAttempt, GuidedCapture } from './src/types';
 import { BottomNav } from './src/components/BottomNav';
 import { EdgeBack } from './src/components/EdgeBack';
+import { ContentContainer } from './src/components/ContentContainer';
 import { MaterialAPI, updateSubject, deleteSubject } from './src/api/client';
 import { resolveRouting } from './src/utils/intent';
 import QuizOverview from './src/screens/QuizOverview';
@@ -38,6 +39,20 @@ import { QuizScreen } from './src/screens/QuizScreen';
 import { QuizSetupScreen, QuizPrefs } from './src/screens/QuizSetupScreen';
 import { CardsPrefs } from './src/components/CardsSetupSheet';
 import { ProfileScreen } from './src/screens/ProfileScreen';
+
+// Accessibility: cap Dynamic Type scaling app-wide so large accessibility text
+// sizes don't overflow fixed-height rows or clip (no maxFontSizeMultiplier was
+// set anywhere in src/). iOS HIG + Android font-scale guidance. 1.3 keeps the
+// system's largest setting usable without breaking the quiet-tutor layouts.
+// Accessibility: cap Dynamic Type scaling app-wide so large accessibility text
+// sizes don't overflow fixed-height rows or clip (no maxFontSizeMultiplier was
+// set anywhere in src/). iOS HIG + Android font-scale guidance. 1.3 keeps the
+// system's largest setting usable without breaking the quiet-tutor layouts.
+// `defaultProps` was removed from the RN Text typings, so cast for the side effect.
+(Text as any).defaultProps = {
+  ...((Text as any).defaultProps || {}),
+  maxFontSizeMultiplier: 1.3,
+};
 
 export default function App() {
   const [fontsLoaded] = useFonts({
@@ -647,7 +662,7 @@ export default function App() {
             },
           ]}
         >
-          {renderActiveScreen()}
+          <ContentContainer>{renderActiveScreen()}</ContentContainer>
         </Animated.View>
         {showBottomNav && (
           <BottomNav currentTab={activeTab} onSelectTab={handleSelectTab} />

@@ -69,3 +69,11 @@ CLAUDE.md
 CHANGES.md
 LOCAL_NOTES.md
 .devnotes/
+
+# Local Claude Code + agent tooling (per-user settings, downloaded skill mirrors)
+.claude/settings.local.json
+.claude/skills/
+.agents/
+
+# Impeccable design-tool working output (regenerable)
+.impeccable/

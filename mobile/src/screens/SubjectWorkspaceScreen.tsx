@@ -7,6 +7,7 @@ import {
   StyleSheet,
   ActivityIndicator,
   Alert,
+  AccessibilityInfo,
   Animated,
   Modal,
   PanResponder,
@@ -80,7 +81,8 @@ interface SubjectWorkspaceScreenProps {
   onCloseChat: () => void;
 }
 
-// --- Overview helpers (reused from SubjectDetailScreen; see that file) --------
+// --- Overview helpers (inline since SubjectDetailScreen was folded into this
+// workspace screen during the native-conformance audit) --------
 
 function isSummaryFailed(s: SummaryAPI | null): boolean {
   if (!s) return true;
@@ -204,7 +206,14 @@ export function SubjectWorkspaceScreen({
         if (g.dy > 90) {
           onCloseChat();
         } else {
-          Animated.spring(dragY, { toValue: 0, useNativeDriver: true }).start();
+          // Respect Reduce Motion: jump to rest instead of springing.
+          AccessibilityInfo.isReduceMotionEnabled().then((reduce) => {
+            if (reduce) {
+              dragY.setValue(0);
+            } else {
+              Animated.spring(dragY, { toValue: 0, useNativeDriver: true }).start();
+            }
+          });
         }
       },
     })
@@ -641,7 +650,7 @@ export function SubjectWorkspaceScreen({
           onPress={onOpenChat}
           style={({ pressed }) => [styles.fab, pressed && styles.fabPressed]}
         >
-          <SparklesIcon size={20} color="#FFFFFF" />
+          <SparklesIcon size={20} color={colors.surface} />
           <Text style={styles.fabLabel}>Ask AI</Text>
         </Pressable>
       )}
@@ -757,7 +766,7 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     borderWidth: 1,
     borderColor: colors.borderLight,
-    backgroundColor: '#FFFFFF',
+    backgroundColor: colors.surface,
   },
   titleMenuBtnPressed: { backgroundColor: colors.surfaceMuted },
   divider: { height: 1, backgroundColor: colors.borderLight, marginVertical: 12 },
@@ -786,7 +795,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     backgroundColor: colors.brandGreen,
     borderRadius: 16,
-    shadowColor: '#243C2C',
+    shadowColor: colors.brandGreen,
     shadowOpacity: 0.10,
     shadowRadius: 12,
     shadowOffset: { width: 0, height: 5 },
@@ -879,7 +888,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 22,
     borderRadius: 30,
     backgroundColor: colors.brandGreen,
-    shadowColor: '#000000',
+    shadowColor: colors.ink,
     shadowOpacity: 0.22,
     shadowRadius: 10,
     shadowOffset: { width: 0, height: 6 },
@@ -888,7 +897,7 @@ const styles = StyleSheet.create({
   fabLabel: {
     fontFamily: typography.sansSemiBold,
     fontSize: 15,
-    color: '#FFFFFF',
+    color: colors.surface,
   },
   fabPressed: { opacity: 0.85, transform: [{ scale: 0.96 }] },
   // Full-height chat sheet (Modal slide-up).

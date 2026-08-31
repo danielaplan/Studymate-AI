@@ -295,7 +295,7 @@ const styles = StyleSheet.create({
     borderColor: colors.borderLight,
     paddingHorizontal: 14,
     paddingVertical: 14,
-    shadowColor: '#000000',
+    shadowColor: colors.ink,
     shadowOpacity: 0.05,
     shadowRadius: 12,
     shadowOffset: { width: 0, height: 6 },
@@ -394,7 +394,7 @@ const styles = StyleSheet.create({
     color: colors.textSecondary,
   },
   chipTextActive: {
-    color: '#FFFFFF',
+    color: colors.surface,
   },
   outputList: {
     gap: 8,
@@ -427,7 +427,7 @@ const styles = StyleSheet.create({
   primaryBtnText: {
     fontFamily: typography.sansSemiBold,
     fontSize: 14,
-    color: '#FFFFFF',
+    color: colors.surface,
   },
   ghostBtn: {
     borderRadius: 12,
@@ -474,20 +474,20 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   errorBlock: {
-    backgroundColor: '#FBECEA',
+    backgroundColor: colors.errorSoft,
     borderWidth: 1,
-    borderColor: '#EBC6C0',
+    borderColor: colors.errorBorder,
     borderRadius: 14,
     padding: 12,
   },
   errorText: {
     fontFamily: typography.sansRegular,
     fontSize: 13,
-    color: '#8A3B32',
+    color: colors.errorText,
     marginBottom: 10,
   },
   retryBtn: {
-    backgroundColor: '#D9694E',
+    backgroundColor: colors.error,
     borderRadius: 12,
     paddingVertical: 9,
     alignItems: 'center',
@@ -495,6 +495,6 @@ const styles = StyleSheet.create({
   retryBtnText: {
     fontFamily: typography.sansSemiBold,
     fontSize: 13,
-    color: '#FFFFFF',
+    color: colors.surface,
   },
 });

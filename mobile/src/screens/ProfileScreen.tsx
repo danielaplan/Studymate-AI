@@ -1,14 +1,14 @@
 import React from 'react';
-import { View, Text, StyleSheet, Image, Pressable, ScrollView, Alert } from 'react-native';
+import { View, Text, StyleSheet, Pressable, ScrollView, Alert } from 'react-native';
 import { colors, typography } from '../theme';
 import { Header } from '../components/Header';
+import { Monogram } from '../components/Monogram';
+import { ContentContainer } from '../components/ContentContainer';
 import { SettingsIcon, ShieldIcon, ChevronRightIcon } from '../components/Icons';
 
 interface ProfileScreenProps {
   onOpenMenu: () => void;
 }
-
-const PROFILE_AVATAR = 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=300&q=80';
 
 export function ProfileScreen({ onOpenMenu }: ProfileScreenProps) {
   return (
@@ -19,15 +19,16 @@ export function ProfileScreen({ onOpenMenu }: ProfileScreenProps) {
           profile context itself. */}
       <Header onMenu={onOpenMenu} onProfile={() => {}} />
 
-      <ScrollView
-        contentContainerStyle={styles.scrollContent}
-        showsVerticalScrollIndicator={false}
-      >
-        {/* User Identity Card */}
+      <ContentContainer style={styles.contentWrap}>
+        <ScrollView
+          contentContainerStyle={styles.scrollContent}
+          showsVerticalScrollIndicator={false}
+        >
+        {/* User Identity Card — no photo, no hardcoded identity. The monogram is
+            generic; a real name would come from authenticated storage. */}
         <View style={styles.identitySection}>
-          <Image source={{ uri: PROFILE_AVATAR }} style={styles.avatarImage} />
-          <Text style={styles.userName}>Alex Rivera</Text>
-          <Text style={styles.userEmail}>a.rivera@university.edu</Text>
+          <Monogram size={96} />
+          <Text style={styles.userName}>Your Profile</Text>
         </View>
 
         <View style={styles.divider} />
@@ -68,6 +69,7 @@ export function ProfileScreen({ onOpenMenu }: ProfileScreenProps) {
           </View>
         </View>
       </ScrollView>
+      </ContentContainer>
     </View>
   );
 }
@@ -76,6 +78,9 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: colors.background,
+  },
+  contentWrap: {
+    flex: 1,
   },
   scrollContent: {
     paddingHorizontal: 20,
@@ -86,24 +91,11 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginBottom: 28,
   },
-  avatarImage: {
-    width: 96,
-    height: 96,
-    borderRadius: 48,
-    borderWidth: 2,
-    borderColor: colors.borderLight,
-    marginBottom: 16,
-  },
   userName: {
     fontFamily: typography.serifBold,
     fontSize: 32,
     color: colors.textPrimary,
-    marginBottom: 4,
-  },
-  userEmail: {
-    fontFamily: typography.sansRegular,
-    fontSize: 14,
-    color: colors.textMuted,
+    marginTop: 16,
   },
   divider: {
     height: 1,
@@ -126,7 +118,7 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     paddingVertical: 14,
     paddingHorizontal: 16,
-    backgroundColor: '#FFFFFF',
+    backgroundColor: colors.surface,
     borderRadius: 12,
     borderWidth: 1,
     borderColor: colors.borderLight,
@@ -156,7 +148,7 @@ const styles = StyleSheet.create({
     marginTop: 2,
   },
   privacyCard: {
-    backgroundColor: '#FFFFFF',
+    backgroundColor: colors.surface,
     borderRadius: 14,
     borderWidth: 1,
     borderColor: colors.borderLight,

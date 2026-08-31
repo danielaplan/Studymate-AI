@@ -22,16 +22,40 @@ export const colors = {
   sageBadge: '#E9F0E7',
   sageBadgeText: '#2A3D2B',
 
-  // Modern active states
-  activeTabPill: '#E5EEF7',
-  activeTabText: '#1F426C',
+  // Highest-emphasis CTA (onboarding Continue, pickers, empty-state). Documented
+  // as `primary-ink` in DESIGN.md; previously hard-coded as #1E221D in several
+  // screens, which drifted from brandGreenDark. Centralize it here.
+  inkButton: '#1E221D',
+
+  // A single, sparingly-used alert color for BLOCKING states only (failed
+  // upload, offline, still-indexing when an action depends on it). The system is
+  // deliberately quiet; this must never be used decoratively.
+  alert: '#B23A3A',
+
+  // Soft variants of the canonical status tokens (defined in the Status & tags
+  // block below). Quiz correct/incorrect/partial feedback routes through
+  // success/error/warning; these soft tints back the badges and wrong-option rows
+  // so the palette stays disciplined. Previously hard-coded literals in
+  // QuizOverview.
+  errorSoft: '#F7DED6',
+  errorText: '#9A3A22',
+  // Border tint for the light-red error surfaces (consolidates the three
+  // near-identical #F3C9C9 / #EBC6C0 borders that used to drift across
+  // HomeScreen / GuidedCaptureThread / SubjectsScreen).
+  errorBorder: '#EBC6C0',
+
+  // Tab colors. The old blue activeTabPill/activeTabText tokens violated the One
+  // Accent Rule (a second accent) and were never referenced — removed during the
+  // native-conformance audit.
   inactiveTab: '#5F645F',
 
   // Text
   textPrimary: '#1C1F1C',
   textSecondary: '#3E443F',
   textMuted: '#727772',
-  textPlaceholder: '#9A9E97',
+  // Placeholder text. Was #9A9E97 (~2.3:1) — below the WCAG AA 4.5:1 floor on
+  // white. Darkened to a calm green-gray that meets AA while staying quiet.
+  textPlaceholder: '#6B716A',
 
   // Border & divider
   borderLight: '#EEEAE1',
